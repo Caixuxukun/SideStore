@@ -5,7 +5,8 @@ on:
   workflow_dispatch:
 jobs:
   profile-rules:
-    runs-on: macos-15
+    # Use Intel capacity; the ARM64 queue may fail before a runner is assigned.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
       - name: Compile and run profile regression tests
