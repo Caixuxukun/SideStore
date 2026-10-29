@@ -558,7 +558,9 @@ final class PipelineHandler: PipelineExecutionHandler,
             return .defaultProfile
         }
 
-        let allProfiles = ProfileManager.shared.getAllLocalProfiles()
+        let allProfiles = ProfileManager.shared.getAllLocalProfiles().filter {
+            SigningProfileRules.matches($0.bundleIdentifier, bundleID)
+        }
         guard !allProfiles.isEmpty else {
             return .defaultProfile
         }

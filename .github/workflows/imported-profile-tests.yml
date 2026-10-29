@@ -1,0 +1,14 @@
+name: Imported profile signing rules
+on:
+  push:
+    branches: [fix/third-party-signing]
+  workflow_dispatch:
+jobs:
+  profile-rules:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run profile regression tests
+        run: |
+          swiftc -swift-version 6 SideStore/Core/Profiles/SigningProfileRules.swift scripts/tests/SigningProfileRulesTests.swift -o "$RUNNER_TEMP/profile-tests"
+          "$RUNNER_TEMP/profile-tests"

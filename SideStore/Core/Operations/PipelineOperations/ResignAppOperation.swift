@@ -21,7 +21,6 @@ final class ResignAppOperation: BasePipelineOperation<InstallAppOperationContext
         }
         try await super.executePreconditionCheck(parentProgress: parentProgress)
         
-        let team = try await AuthManager.shared.getAuthenticatedTeam()
         guard
             let appBundle = self.context.targetAppBundle,
             let profiles = self.context.provisioningProfiles,
@@ -42,7 +41,14 @@ final class ResignAppOperation: BasePipelineOperation<InstallAppOperationContext
         
         self.setProgress(40)
         
-        let resignedAppURL = try await self.resignAppBundle(at: appBundleURL, team: team, certificate: certificate, profiles: Array(profiles.values))
+        let resignedAppURL: URL
+        if context.overrideProvisioningProfile != nil {
+            try ImportedProfileSigner.sign(at: appBundleURL, certificate: certificate, profiles: profiles)
+            resignedAppURL = appBundleURL
+        } else {
+            let team = try await AuthManager.shared.getAuthenticatedTeam()
+            resignedAppURL = try await self.resignAppBundle(at: appBundleURL, team: team, certificate: certificate, profiles: Array(profiles.values))
+        }
         guard let resignedAppBundle = ALTApplication(fileURL: resignedAppURL) else {
             throw OperationError.invalidApp(reason: "Could not load resigned app bundle at '\(resignedAppURL.lastPathComponent)'")
         }
@@ -59,7 +65,9 @@ final class ResignAppOperation: BasePipelineOperation<InstallAppOperationContext
         let bundleIdentifier = context.targetBundleIdentifier
         let finalBundleIdentifier: String
         if let profile = context.useMainProfile ? profiles.values.first : profiles[bundleIdentifier] {
-            finalBundleIdentifier = profile.bundleIdentifier
+            finalBundleIdentifier = context.overrideProvisioningProfile != nil
+                ? try SigningProfileRules.bundleIdentifier(profileID: profile.bundleIdentifier, requestedID: bundleIdentifier)
+                : profile.bundleIdentifier
         } else {
             finalBundleIdentifier = bundleIdentifier
         }
@@ -129,7 +137,12 @@ final class ResignAppOperation: BasePipelineOperation<InstallAppOperationContext
         }
         var infoDictionary = parser.rawDictionary as [String: Any]
         
-        let newBundleID = appexBundleIds[identifier] ?? profile.bundleIdentifier
+        let newBundleID: String
+        if context.overrideProvisioningProfile != nil {
+            newBundleID = try SigningProfileRules.bundleIdentifier(profileID: profile.bundleIdentifier, requestedID: identifier)
+        } else {
+            newBundleID = appexBundleIds[identifier] ?? profile.bundleIdentifier
+        }
         infoDictionary[kCFBundleIdentifierKey as String] = newBundleID
 
         // Fix-up BGTaskScheduler identifiers so they stay under the new bundle ID.
@@ -170,7 +183,7 @@ final class ResignAppOperation: BasePipelineOperation<InstallAppOperationContext
         let installedAppUTI = ["UTTypeConformsTo": [],
                                "UTTypeDescription": "AltStore Installed App",
                                "UTTypeIconFiles": [],
-                               "UTTypeIdentifier": InstalledApp.installedAppUTI(forBundleIdentifier: profile.bundleIdentifier),
+                               "UTTypeIdentifier": InstalledApp.installedAppUTI(forBundleIdentifier: newBundleID),
                                "UTTypeTagSpecification": [:]] as [String : Any]
         
         var exportedUTIs = infoDictionary[Bundle.Info.exportedUTIs] as? [[String: Any]] ?? []

@@ -141,9 +141,8 @@ final class SelectProfileViewController: UITableViewController {
         let appID = installedApp.bundleIdentifier
         let resignedID = installedApp.resignedBundleIdentifier
 
-        let isWildcard = profileID == "*" || profileID.hasSuffix(".*") || profileID.hasSuffix("*")
-        let isExactMatch = (profileID.lowercased() == appID.lowercased()) || (profileID.lowercased() == resignedID.lowercased())
-        guard isWildcard || isExactMatch else { return false }
+        guard SigningProfileRules.matches(profileID, appID) ||
+              SigningProfileRules.matches(profileID, resignedID) else { return false }
 
         return ProfileManager.shared.getMatchingCertificate(for: profile) != nil
     }

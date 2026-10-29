@@ -189,6 +189,36 @@ public final class ProfileManager: @unchecked Sendable {
         return getMatchingCertificate(for: profile) != nil && profile.expirationDate > Date()
     }
 
+    func contains(_ certificate: ALTCertificate, in profile: ALTProvisioningProfile) -> Bool {
+        guard let certificateData = certificate.data else { return false }
+        return profile.certificates.contains { $0.data == certificateData }
+    }
+
+    func validate(_ profile: ALTProvisioningProfile, certificate: ALTCertificate, bundleID: String) throws {
+        guard profile.expirationDate > Date() else {
+            throw OperationError.missingProvisioningProfile(reason: "Imported profile '\(profile.name)' has expired.")
+        }
+        guard certificate.x509.expiryDate > Date() else {
+            throw OperationError.certificateExpired(appName: bundleID)
+        }
+        guard contains(certificate, in: profile) else {
+            throw OperationError.missingProvisioningProfile(reason: "Profile '\(profile.name)' does not contain the selected signing certificate. Import its matching .p12 with private key.")
+        }
+        _ = try SigningProfileRules.bundleIdentifier(profileID: profile.bundleIdentifier, requestedID: bundleID)
+    }
+
+    func matchingProfile(for bundleID: String, certificate: ALTCertificate) -> ALTProvisioningProfile? {
+        getAllLocalProfiles()
+            .filter { (try? validate($0, certificate: certificate, bundleID: bundleID)) != nil }
+            .sorted {
+                let lhsExact = $0.bundleIdentifier == bundleID
+                let rhsExact = $1.bundleIdentifier == bundleID
+                if lhsExact != rhsExact { return lhsExact }
+                if $0.expirationDate != $1.expirationDate { return $0.expirationDate > $1.expirationDate }
+                return $0.uuid.uuidString < $1.uuid.uuidString
+            }.first
+    }
+
     public func getAssignedProfile(for bundleIdentifier: String) -> ALTProvisioningProfile? {
         guard let uuidString = getAssignedProfilesDict()[bundleIdentifier],
               let uuid = UUID(uuidString: uuidString) else {

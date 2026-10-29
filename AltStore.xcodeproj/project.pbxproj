@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        C3A47B0130F1000100000001 /* CodeSignKit in Frameworks */ = {isa = PBXBuildFile; productRef = C3A47B0130F1000100000002 /* CodeSignKit */; };
 		A84596F62F7DC4C90000B8CD /* SideStore.conf in Resources */ = {isa = PBXBuildFile; fileRef = A84596F52F7DC4C90000B8CD /* SideStore.conf */; };
 		A87939D3303A89CA004D9227 /* Minimuxer in Frameworks */ = {isa = PBXBuildFile; productRef = A87939D2303A89CA004D9227 /* Minimuxer */; };
 		A8C37029302DA7F30010213A /* MarkdownKit in Frameworks */ = {isa = PBXBuildFile; platformFilter = ios; productRef = A8C37028302DA7F30010213A /* MarkdownKit */; };
@@ -249,6 +250,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                C3A47B0130F1000100000001 /* CodeSignKit in Frameworks */,
 				A8F5E9AF30422E3600DBD7E1 /* SideSign in Frameworks */,
 				A8C37029302DA7F30010213A /* MarkdownKit in Frameworks */,
 				A8C3702C302DA80D0010213A /* KeychainAccess in Frameworks */,
@@ -369,6 +371,7 @@
 			);
 			name = SideStore;
 			packageProductDependencies = (
+                C3A47B0130F1000100000002 /* CodeSignKit */,
 				A8C37028302DA7F30010213A /* MarkdownKit */,
 				A8C3702B302DA80D0010213A /* KeychainAccess */,
 				A8C3702E302DA82A0010213A /* Nuke */,
@@ -1012,6 +1015,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+        C3A47B0130F1000100000002 /* CodeSignKit */ = {
+            isa = XCSwiftPackageProductDependency;
+            package = A8E8DEA43059BC8800F69B47 /* XCRemoteSwiftPackageReference "CodeSignKit" */;
+            productName = CodeSignKit;
+        };
 		A87939D2303A89CA004D9227 /* Minimuxer */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = Minimuxer;

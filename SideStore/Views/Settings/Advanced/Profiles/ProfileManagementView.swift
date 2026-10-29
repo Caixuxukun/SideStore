@@ -35,7 +35,8 @@ struct ProfileManagementView: View {
     @State private var navigateToPortalProfiles = false
 
     private var allowedImportTypes: [UTType] {
-        [UTType(filenameExtension: "mobileprovision")].compactMap { $0 }
+        // Some file providers expose provisioning profiles as generic data.
+        [UTType(filenameExtension: "mobileprovision") ?? .data, .data]
     }
 
     private var filteredProfiles: [ALTProvisioningProfile] {
@@ -221,8 +222,8 @@ struct ProfileManagementView: View {
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
-                guard url.startAccessingSecurityScopedResource() else { return }
-                defer { url.stopAccessingSecurityScopedResource() }
+                let isScoped = url.startAccessingSecurityScopedResource()
+                defer { if isScoped { url.stopAccessingSecurityScopedResource() } }
                 handleFileSelected(at: url)
             case .failure(let error):
                 viewModel.showToast("Import canceled: \(error.localizedDescription)")
@@ -250,50 +251,31 @@ struct ProfileManagementView: View {
                     }
             }
         }
-        .alert(item: $pendingImport) { pending in
+        .alert("Import Provisioning Profile", isPresented: Binding(
+            get: { pendingImport != nil },
+            set: { if !$0 { pendingImport = nil } }
+        ), presenting: pendingImport) { pending in
+            SwiftUI.Button("Import") { commitImport(pending.profile) }
+            SwiftUI.Button("Cancel", role: .cancel) {}
+        } message: { pending in
             switch pending.analysis {
             case .signable(let certName, _):
-                return Alert(
-                    title: Text("Link Signing Certificate?"),
-                    message: Text("Found matching signing certificate '\(certName)' with private key in SideStore.\n\nWould you like to link and save this profile?"),
-                    primaryButton: .default(Text("Link & Save")) {
-                        commitImport(pending.profile)
-                    },
-                    secondaryButton: .cancel()
-                )
+                Text("Matching signing certificate: '\(certName)'. Import this profile, then select it when installing or resigning an app.")
             case .publicOnly(let certName, _):
-                return Alert(
-                    title: Text("Missing Private Key"),
-                    message: Text("Found certificate '\(certName)' in this profile, but no matching private key (.p12) was found in SideStore.\n\nContinuing means this profile will not be usable for signing apps until a matching signing certificate with private key is imported."),
-                    primaryButton: .destructive(Text("Import Anyway")) {
-                        commitImport(pending.profile)
-                    },
-                    secondaryButton: .cancel()
-                )
-            case .noMatch(let count):
-                return Alert(
-                    title: Text("No Matching Signing Certificate"),
-                    message: Text("This provisioning profile contains \(count) developer certificate(s), but none match any signing certificates in SideStore.\n\nContinuing means this profile will not be usable for signing apps until a matching signing certificate with private key is imported."),
-                    primaryButton: .destructive(Text("Import Anyway")) {
-                        commitImport(pending.profile)
-                    },
-                    secondaryButton: .cancel()
-                )
+                Text("Certificate '\(certName)' has no private key. Import its matching .p12 before signing with this profile.")
+            case .noMatch:
+                Text("No matching signing certificate found. Import the matching .p12 before signing with this profile.")
             }
         }
-        .alert(isPresented: $showDeleteConfirmation) {
-            Alert(
-                title: Text("Delete Local Profile?"),
-                message: Text("Are you sure you want to delete '\(profileToDelete?.name ?? "this profile")' from local storage? Any apps assigned to this profile will revert to default."),
-                primaryButton: .destructive(Text("Delete")) {
-                    if let target = profileToDelete {
-                        Task {
-                            await viewModel.deleteProfile(target, alsoDeleteFromPortal: false)
-                        }
-                    }
-                },
-                secondaryButton: .cancel()
-            )
+        .alert("Delete Local Profile?", isPresented: $showDeleteConfirmation) {
+            SwiftUI.Button("Delete", role: .destructive) {
+                if let target = profileToDelete {
+                    Task { await viewModel.deleteProfile(target, alsoDeleteFromPortal: false) }
+                }
+            }
+            SwiftUI.Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Delete '\(profileToDelete?.name ?? "this profile")' from local storage? Assigned apps will revert to default.")
         }
         .alert("Delete Portal Profile?", isPresented: $showPortalDeleteConfirmation) {
             SwiftUI.Button("Delete from Portal & Locally", role: .destructive) {
@@ -354,7 +336,7 @@ struct ProfileManagementView: View {
             let analysis = ProfileManager.shared.analyzeCertificates(for: profile)
             self.pendingImport = PendingProfileImport(profile: profile, analysis: analysis)
         } catch {
-            viewModel.showToast("Invalid provisioning profile: \(error.localizedDescription)")
+            viewModel.errorMessage = "Invalid provisioning profile: \(error.localizedDescription)"
         }
     }
 

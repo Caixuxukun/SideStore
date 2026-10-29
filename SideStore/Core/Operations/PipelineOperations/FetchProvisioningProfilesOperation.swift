@@ -35,13 +35,34 @@ class FetchProvisioningProfilesOperation: BasePipelineOperation<InstallAppOperat
         let appExtensions = targetAppBundle.appExtensions
 
         if let overrideProfile = self.context.overrideProvisioningProfile {
+            guard let certificate = self.context.targetSigningCertificate else {
+                throw OperationError.invalidParameters("An imported profile requires its matching .p12.")
+            }
+            try ProfileManager.shared.validate(overrideProfile, certificate: certificate, bundleID: effectiveBundleId)
             self.debugLog("[FetchProvisioningProfiles] Using override provisioning profile '\(overrideProfile.name)' (\(overrideProfile.uuid)) for \(effectiveBundleId)")
             var profiles = [effectiveBundleId: overrideProfile]
-            if !self.context.useMainProfile, !appExtensions.isEmpty {
-                for appExtension in appExtensions {
-                    let updatedExtensionBundleId = appExtension.bundleIdentifier.replacingOccurrences(of: targetAppBundle.bundleIdentifier, with: effectiveBundleId)
-                    profiles[updatedExtensionBundleId] = overrideProfile
+            for appExtension in appExtensions {
+                guard appExtension.bundleIdentifier.hasPrefix(targetAppBundle.bundleIdentifier + ".") else {
+                    throw OperationError.invalidApp(reason: "Extension bundle ID is outside the parent app's namespace.")
                 }
+                let suffix = appExtension.bundleIdentifier.dropFirst(targetAppBundle.bundleIdentifier.count)
+                let updatedExtensionBundleId = effectiveBundleId + suffix
+                if SigningProfileRules.matches(overrideProfile.bundleIdentifier, updatedExtensionBundleId) {
+                    profiles[updatedExtensionBundleId] = overrideProfile
+                } else if let extensionProfile = ProfileManager.shared.matchingProfile(for: updatedExtensionBundleId, certificate: certificate) {
+                    profiles[updatedExtensionBundleId] = extensionProfile
+                } else {
+                    throw OperationError.missingProvisioningProfile(reason: "Import a profile for extension '\(updatedExtensionBundleId)' containing the same signing certificate, or remove that extension.")
+                }
+            }
+            // Every retained extension has its own validated mapping, even when
+            // the user requested sharing the main profile.
+            self.context.useMainProfile = false
+            self.context.appexBundleIds = nil
+            let deviceID = profiles.values.contains(where: { !$0.deviceIDs.isEmpty })
+                ? try await safeFetchUDID() : nil
+            for profile in profiles.values {
+                try SigningProfileRules.validateDevice(profileData: profile.data, deviceID: deviceID)
             }
             self.setProgress(100)
             self.debugLog("[FetchProvisioningProfiles] Total override profiles prepared: \(profiles.count) -> keys: \(Array(profiles.keys))")
@@ -186,6 +207,10 @@ class FetchProvisioningProfilesOperation: BasePipelineOperation<InstallAppOperat
         verboseLog(targetAppBundle.dumpMachOInfo())
         self.debugLog("[FetchProvisioningProfiles] Fetching provisioning profile from Apple for App ID \(groupAppID.bundleIdentifier)...")
         let profile = try await DeveloperPortalProxy.shared.downloadProvisioningProfile(for: groupAppID, deviceType: DeveloperPortalProxy.currentDeviceType, team: team)
+        if let certificate = self.context.targetSigningCertificate,
+           !ProfileManager.shared.contains(certificate, in: profile) {
+            throw OperationError.missingProvisioningProfile(reason: "The downloaded profile does not contain your signing certificate. For a third-party .p12, import its matching .mobileprovision and select it for this app.")
+        }
         self.debugLog("[FetchProvisioningProfiles] Provisioning profile fetched for \(groupAppID.bundleIdentifier) (Name: \(profile.name), Expiration: \(String(describing: profile.expirationDate)))")
         return profile
     }

@@ -32,9 +32,8 @@ final class UpdateAppCertificateOperation: BasePipelineOperation<InstallAppOpera
             if let matchingCert = ProfileManager.shared.getMatchingCertificate(for: assignedProfile) {
                 debugLog("[UpdateAppCertificateOperation] Loaded matching certificate '\(matchingCert.serialNumber)' for assigned profile. Setting context.overrideSigningCertificate.")
                 self.context.overrideSigningCertificate = matchingCert
-            } else if let serialNumber = self.context.installedApp?.certificateSerialNumber,
-                      let customCert = CertificateManager.shared.getSignableCertificate(for: serialNumber) {
-                self.context.overrideSigningCertificate = customCert
+            } else {
+                throw OperationError.missingProvisioningProfile(reason: "Import the matching .p12 with private key for profile '\(assignedProfile.name)'.")
             }
         } else if let installedApp = self.context.installedApp, let serialNumber = installedApp.certificateSerialNumber {
             debugLog("[UpdateAppCertificateOperation] InstalledApp '\(installedApp.name)' has custom certificate serial: '\(serialNumber)'")
@@ -46,6 +45,16 @@ final class UpdateAppCertificateOperation: BasePipelineOperation<InstallAppOpera
             }
         }
         
+        if self.context.overrideProvisioningProfile == nil,
+           let certificate = self.context.targetSigningCertificate,
+           let profile = ProfileManager.shared.matchingProfile(for: self.context.targetBundleIdentifier, certificate: certificate) {
+            self.context.overrideProvisioningProfile = profile
+        }
+        if let profile = self.context.overrideProvisioningProfile,
+           let certificate = self.context.targetSigningCertificate {
+            try ProfileManager.shared.validate(profile, certificate: certificate, bundleID: self.context.targetBundleIdentifier)
+            self.context.appendTeamID = false
+        }
         self.setProgress(100)
     }
 }

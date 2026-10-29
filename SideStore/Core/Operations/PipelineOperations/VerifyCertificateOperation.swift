@@ -28,6 +28,27 @@ final class VerifyCertificateOperation: BasePipelineOperation<InstallAppOperatio
         }
         try await super.executePreconditionCheck(parentProgress: parentProgress)
         self.setProgress(10)
+
+        if let profile = context.overrideProvisioningProfile,
+           let certificate = context.targetSigningCertificate {
+            try ProfileManager.shared.validate(profile, certificate: certificate, bundleID: context.targetBundleIdentifier)
+            if !willResign, let installedApp = context.installedApp,
+               let installedCertificate = CertificateManager.shared.getSigningCertificate(for: installedApp),
+               installedCertificate.data != certificate.data {
+                throw OperationError.invalidParameters("The imported profile uses a different certificate. Resign the app instead of refreshing its profile.")
+            }
+            // A third-party certificate is not in the signed-in account's portal.
+            // Keep revocation checks without requiring that unrelated portal.
+            let result = await ocspCheck(certificate.x509)
+            context.targetCertStatus = result
+            switch result {
+            case .revoked: throw OperationError.certificateRevoked(appName: context.targetBundleIdentifier)
+            case .expired: throw OperationError.certificateExpired(appName: context.targetBundleIdentifier)
+            case .valid: break
+            }
+            self.setProgress(100)
+            return
+        }
         
         let team = try await AuthManager.shared.getAuthenticatedTeam()
         
