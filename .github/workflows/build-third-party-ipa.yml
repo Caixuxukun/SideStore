@@ -25,7 +25,7 @@ jobs:
           set -o pipefail
           xcodebuild -version
           mkdir -p build/logs
-          make build 2>&1 | tee build/logs/build.log | xcbeautify --renderer github-actions
+          make -B build 2>&1 | tee build/logs/build.log | xcbeautify --renderer github-actions
           make fakesign
           make ipa
           unzip -t SideStore.ipa
