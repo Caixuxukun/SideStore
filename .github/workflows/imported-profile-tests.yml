@@ -17,3 +17,7 @@ jobs:
         run: |
           swiftc -swift-version 5 AltStore/Core/Model/DatabaseManager/PersistentContainer.swift scripts/tests/PersistentContainerTests.swift -o "$RUNNER_TEMP/database-tests"
           "$RUNNER_TEMP/database-tests"
+      - name: Compile and run provisioning profile locator tests
+        run: |
+          swiftc -swift-version 6 SideStore/Core/Profiles/ProvisioningProfileLocator.swift scripts/tests/ProvisioningProfileLocatorTests.swift -o "$RUNNER_TEMP/profile-locator-tests"
+          "$RUNNER_TEMP/profile-locator-tests"

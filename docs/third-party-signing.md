@@ -45,6 +45,9 @@ version and submodules, then verify on a test device:
   profile, unrelated wildcard prefix and extension without a matching profile.
 - Refresh/re-sign the installed app; when changing certificates, require re-signing.
 - Install and refresh with the normal Apple ID signing path.
+- Sign the IPA with an external tool that provisions only the main app, then
+  launch SideStore; the widget extension should inherit the main profile instead
+  of blocking the first launch.
 
 No real certificates, private keys, passwords or device identifiers are included
 in the tests.
@@ -54,3 +57,16 @@ in the tests.
 When the signing profile does not grant SideStore access to an App Group, the main app now stores its database in Application Support/LocalDatabase. This is persistent storage, not a temporary or in-memory database. Existing shared storage remains the default when available. Once a local store is created, it remains selected across launches and signing capability changes; no automatic merge with a shared store is attempted. Extensions never create private database copies. Widget sharing and cross-app backup features still require appropriate App Group entitlements.
 
 The local maintenance counter is stored with the local database, preventing first-run maintenance from clearing imported credentials on every launch. Startup-dependent account import and UI transitions wait for database startup. Background log cleanup and error logging skip writes when startup has failed. Real-device re-signing and reinstall behavior needs proper testing.
+
+## Installing with another signer
+
+Tools such as ESign or iloader sometimes provision only the main app and leave
+`AltWidgetExtension.appex` without its own `embedded.mobileprovision`. SideStore
+now falls back to the enclosing app's profile for an extension that has no
+readable profile, so the first launch no longer stops with
+`SignerError.invalidApp(cause: "The app extension is missing a valid provisioning profile.")`.
+The extension inherits the main app's creation and expiration dates. Extensions
+that embed their own profile are unaffected, and a main app without a profile is
+still rejected as before. The fallback covers launch and install bookkeeping
+only; signing still requires a profile for every retained extension.
+

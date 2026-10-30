@@ -45,10 +45,19 @@ public class InstalledExtension: BaseEntity, InstalledAppProtocol
         #if targetEnvironment(simulator)
         self.expirationDate = self.refreshedDate.addingTimeInterval(60 * 60 * 24 * 7)
         #else
-        guard let expirationDate = resignedAppExtensionBundle.provisioningProfile?.expirationDate else {
+        // Some installers (ESign, iloader, SideInstaller, ...) only provision the main app,
+        // leaving extensions without their own embedded profile. The extension is still
+        // covered by the enclosing app's profile in that case, so inherit it instead of
+        // refusing to launch.
+        let profileURLs = ProvisioningProfileLocator.candidateProfileURLs(for: resignedAppExtensionBundle.fileURL)
+        guard let effectiveProfile = profileURLs.compactMap({ try? ALTProvisioningProfile(url: $0) }).first else {
             throw ALTError.invalidApp(reason: "The app extension is missing a valid provisioning profile.")
         }
-        self.expirationDate = expirationDate
+        if resignedAppExtensionBundle.provisioningProfile == nil {
+            debugLog("[InstalledExtension] '\(resignedAppExtensionBundle.bundleIdentifier)' has no embedded provisioning profile; using the enclosing app's profile.")
+        }
+        self.refreshedDate = effectiveProfile.creationDate
+        self.expirationDate = effectiveProfile.expirationDate
         #endif
         
         self.update(resignedAppExtensionBundle: resignedAppExtensionBundle)
