@@ -855,6 +855,11 @@ extension AppManager: PipelineProgress, PipelineExecutionContext, PipelineErrorL
     
     func log(_ error: Error, operation: LoggedError.Operation, app: AppProtocol)
     {
+        guard DatabaseManager.shared.isStarted else {
+            debugLog("[AppManager] Database unavailable; error: \(error)")
+            return
+        }
+
         switch error
         {
             case is CancellationError: return // Don't log CancellationErrors

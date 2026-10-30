@@ -13,3 +13,7 @@ jobs:
         run: |
           swiftc -swift-version 6 SideStore/Core/Profiles/SigningProfileRules.swift scripts/tests/SigningProfileRulesTests.swift -o "$RUNNER_TEMP/profile-tests"
           "$RUNNER_TEMP/profile-tests"
+      - name: Compile and run database regression tests
+        run: |
+          swiftc -swift-version 5 AltStore/Core/Model/DatabaseManager/PersistentContainer.swift scripts/tests/PersistentContainerTests.swift -o "$RUNNER_TEMP/database-tests"
+          "$RUNNER_TEMP/database-tests"

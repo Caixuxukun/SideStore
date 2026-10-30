@@ -19,7 +19,11 @@ public final class MaintenanceManager {
     public static let maintenanceCounterFileName = ".maintenance_counter"
 
     private var maintenanceCounterFileURL: URL? {
-        FileManager.default.altstoreSharedDirectory?.appendingPathComponent(Self.maintenanceCounterFileName)
+        let databaseDirectory = PersistentContainer.defaultDirectoryURL()
+        if databaseDirectory.lastPathComponent == "LocalDatabase" {
+            return databaseDirectory.appendingPathComponent(Self.maintenanceCounterFileName)
+        }
+        return FileManager.default.altstoreSharedDirectory?.appendingPathComponent(Self.maintenanceCounterFileName)
     }
 
     private var completedCounter: Int {

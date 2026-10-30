@@ -69,9 +69,6 @@ final class LaunchViewController: UIViewController {
         Task.detached { [weak self] in
             await self?.runLaunchSequence()
         }
-        Task.detached { [weak self] in
-            await self?.doPostLaunch()
-        }
     }
 
     private nonisolated func runLaunchSequence() async {
@@ -82,6 +79,7 @@ final class LaunchViewController: UIViewController {
         do {
             try await DatabaseManager.shared.start()
             await self.finishLaunching()
+            await self.doPostLaunch()
         } catch {
             await self.handleLaunchError(error, retryCallback: self.runLaunchSequence)
         }
@@ -201,6 +199,10 @@ final class LaunchViewController: UIViewController {
 
     @MainActor
     private func transitionToMainInterface() {
+        guard DatabaseManager.shared.isStarted else {
+            Task { await self.runLaunchSequence() }
+            return
+        }
         let destinationVC = destinationViewController!
 
         embed(child: destinationVC)

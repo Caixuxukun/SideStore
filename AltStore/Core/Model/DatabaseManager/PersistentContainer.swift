@@ -51,11 +51,6 @@ public enum DatabaseError: LocalizedError, CustomNSError, Sendable, Equatable {
 
 open class PersistentContainer: NSPersistentContainer, @unchecked Sendable {
     open var isMigrationRequired: Bool {
-        #if !os(tvOS)
-        guard FileManager.default.altstoreSharedDirectory != nil else {
-            return false
-        }
-        #endif
         for description in self.persistentStoreDescriptions {
             guard let url = description.url,
                   let metadata = try? NSPersistentStoreCoordinator.metadataForPersistentStore(ofType: description.type, at: url, options: description.options) else {
@@ -78,17 +73,33 @@ open class PersistentContainer: NSPersistentContainer, @unchecked Sendable {
         #if os(tvOS)
         return FileManager.default.cachesDirectory
         #else
-        guard let sharedDirectoryURL = FileManager.default.altstoreSharedDirectory else {
+        let databaseDirectoryURL = Self.databaseDirectory(
+            sharedDirectory: FileManager.default.altstoreSharedDirectory,
+            applicationSupportDirectory: FileManager.default.applicationSupportDirectory,
+            isAppExtension: Bundle.isAppExtension()
+        )
+        guard let databaseDirectoryURL else {
+            // Extensions must never create an isolated copy of the main app's database.
             return FileManager.default.temporaryDirectory.appendingPathComponent("MissingAppGroupContainer")
         }
-        
-        let databaseDirectoryURL = sharedDirectoryURL.appendingPathComponent("Database")
-        try? FileManager.default.createDirectory(at: databaseDirectoryURL, withIntermediateDirectories: true, attributes: nil)
-
+        try? FileManager.default.createDirectory(at: databaseDirectoryURL, withIntermediateDirectories: true)
         return databaseDirectoryURL
         #endif
     }
     
+    // Keep a private store stable across launches and later changes to signing capabilities.
+    // Switching back to shared storage requires an explicit migration, not an empty database.
+    static func databaseDirectory(sharedDirectory: URL?, applicationSupportDirectory: URL, isAppExtension: Bool) -> URL? {
+        let privateDirectory = applicationSupportDirectory.appendingPathComponent("LocalDatabase", isDirectory: true)
+        if !isAppExtension && FileManager.default.fileExists(atPath: privateDirectory.path) {
+            return privateDirectory
+        }
+        if let sharedDirectory {
+            return sharedDirectory.appendingPathComponent("Database", isDirectory: true)
+        }
+        return isAppExtension ? nil : privateDirectory
+    }
+
     public init(name: String, bundle: Bundle) {
         let models = [bundle]
         let managedObjectModel = NSManagedObjectModel.mergedModel(from: models)!
@@ -111,12 +122,19 @@ open class PersistentContainer: NSPersistentContainer, @unchecked Sendable {
     
     open func loadPersistentStores() async throws {
         #if !os(tvOS)
-        guard FileManager.default.altstoreSharedDirectory != nil else {
+        guard !Bundle.isAppExtension() || FileManager.default.altstoreSharedDirectory != nil else {
             throw DatabaseError.missingAppGroup(
-                reason: NSLocalizedString("Unable to access the shared App Group container. Refusing to create or use a private sandbox fallback database.", comment: "")
+                reason: NSLocalizedString("This extension cannot access the shared App Group container. Open SideStore directly or sign with an App Group-enabled profile.", comment: "")
             )
         }
         #endif
+
+        // Report directory errors before Core Data starts loading. Never substitute an in-memory store.
+        for description in self.persistentStoreDescriptions where description.type == NSSQLiteStoreType {
+            if let url = description.url {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            }
+        }
 
         for description in self.persistentStoreDescriptions {
             guard let url = description.url,

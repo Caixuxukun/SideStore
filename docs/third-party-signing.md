@@ -48,3 +48,9 @@ version and submodules, then verify on a test device:
 
 No real certificates, private keys, passwords or device identifiers are included
 in the tests.
+
+## Running SideStore without App Groups
+
+When the signing profile does not grant SideStore access to an App Group, the main app now stores its database in Application Support/LocalDatabase. This is persistent storage, not a temporary or in-memory database. Existing shared storage remains the default when available. Once a local store is created, it remains selected across launches and signing capability changes; no automatic merge with a shared store is attempted. Extensions never create private database copies. Widget sharing and cross-app backup features still require appropriate App Group entitlements.
+
+The local maintenance counter is stored with the local database, preventing first-run maintenance from clearing imported credentials on every launch. Startup-dependent account import and UI transitions wait for database startup. Background log cleanup and error logging skip writes when startup has failed. Real-device re-signing and reinstall behavior needs proper testing.

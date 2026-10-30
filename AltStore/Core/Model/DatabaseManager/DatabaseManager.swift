@@ -120,12 +120,16 @@ public class DatabaseManager: @unchecked Sendable
             CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), .willMigrateDatabase, nil, nil, true)
         }
 
-        try await self.persistentContainer.loadPersistentStores()
+        // A previous attempt may have loaded the store but failed during preparation.
+        if self.persistentContainer.persistentStoreCoordinator.persistentStores.isEmpty {
+            try await self.persistentContainer.loadPersistentStores()
+        }
         try await self.prepareDatabase()
     }
 
     public func purgeLoggedErrors(before date: Date? = nil) async throws
     {
+        guard self.isStarted else { return }
         try await self.persistentContainer.performBackgroundTask { context in
             let predicate = date.map { NSPredicate(format: "%K <= %@", #keyPath(LoggedError.date), $0 as NSDate) }
             let loggedErrors = LoggedError.all(satisfying: predicate, in: context, requestProperties: [\.returnsObjectsAsFaults: true])
