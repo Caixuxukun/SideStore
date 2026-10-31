@@ -15,11 +15,10 @@ enum ImportedProfileSigner {
             guard let profile = profiles[bundle.bundleIdentifier] else {
                 throw OperationError.missingProvisioningProfile(reason: "No imported profile for '\(bundle.bundleIdentifier)'.")
             }
-            try ProfileManager.shared.validate(profile, certificate: certificate, bundleID: bundle.bundleIdentifier)
-            let entitlements = try SigningProfileRules.entitlements(
-                profile: profile.entitlements, application: bundle.entitlements,
-                bundleID: bundle.bundleIdentifier
-            )
+            try ProfileManager.shared.validate(profile, certificate: certificate, bundleID: bundle.bundleIdentifier, allowBundleIDMismatch: true)
+            // Keep the app's own Bundle ID and embed the profile's application identifier, which is
+            // what Feather-style installers do. iOS checks the entitlements against the profile.
+            let entitlements = SigningProfileRules.profileEntitlements(profile.entitlements, bundleID: bundle.bundleIdentifier)
             let data = try PropertyListSerialization.data(fromPropertyList: entitlements, format: .xml, options: 0)
             guard let xml = String(data: data, encoding: .utf8) else {
                 throw OperationError.invalidParameters("Cannot encode signing entitlements.")

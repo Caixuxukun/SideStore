@@ -561,37 +561,23 @@ final class PipelineHandler: PipelineExecutionHandler,
             return .defaultProfile
         }
 
-        let importedProfiles = ProfileManager.shared.getAllLocalProfiles()
-        let allProfiles = importedProfiles.filter {
-            SigningProfileRules.matches($0.bundleIdentifier, bundleID)
-        }
-        guard !allProfiles.isEmpty else {
-            if !importedProfiles.isEmpty {
-                let profileList = importedProfiles
-                    .map { "• \($0.name): App ID \($0.bundleIdentifier)" }
-                    .joined(separator: "\n")
-                let message = String(
-                    format: NSLocalizedString("You imported %ld provisioning profile(s), but none authorizes '%@'.\n\n%@\n\nTo sign this app with an imported certificate, install it with a custom Bundle ID inside the profile's App ID namespace and then select the profile. Otherwise this install uses your Apple ID.", comment: ""),
-                    importedProfiles.count, bundleID, profileList
-                )
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    let alert = UIAlertController(
-                        title: NSLocalizedString("No Matching Provisioning Profile", comment: ""),
-                        message: message,
-                        preferredStyle: .alert
-                    )
-                    alert.addAction(UIAlertAction(title: NSLocalizedString("Continue", comment: ""), style: .default) { _ in
-                        continuation.resume()
-                    })
-                    presenter.present(alert, animated: true)
-                }
+        // List every imported profile. A profile whose App ID does not cover this Bundle ID can still
+        // sign it Feather-style: the app keeps its Bundle ID and the profile's application identifier
+        // is embedded in the entitlements.
+        let allProfiles = ProfileManager.shared.getAllLocalProfiles()
+            .sorted { lhs, rhs in
+                let lhsMatches = SigningProfileRules.matches(lhs.bundleIdentifier, bundleID)
+                let rhsMatches = SigningProfileRules.matches(rhs.bundleIdentifier, bundleID)
+                if lhsMatches != rhsMatches { return lhsMatches }
+                return lhs.expirationDate > rhs.expirationDate
             }
+        guard !allProfiles.isEmpty else {
             return .defaultProfile
         }
 
         return try await withCheckedThrowingContinuation { continuation in
             let title = NSLocalizedString("Select Provisioning Profile", comment: "")
-            let message = String(format: NSLocalizedString("Choose a provisioning profile for '%@' (%@), or use the default automatic profile.", comment: ""), appName, bundleID)
+            let message = String(format: NSLocalizedString("Choose a provisioning profile for '%@' (%@), or use the default automatic profile. Profiles marked “App ID mismatch” keep the app's Bundle ID and embed the profile's App ID.", comment: ""), appName, bundleID)
 
             let alert = UIAlertController(title: title, message: message, preferredStyle: .actionSheet)
 
@@ -606,7 +592,8 @@ final class PipelineHandler: PipelineExecutionHandler,
             for profile in allProfiles {
                 let isReady = ProfileManager.shared.isProfileReadyToSign(profile)
                 let certInfo = isReady ? "✓ Ready" : (profile.expirationDate < Date() ? "Expired" : "No Key")
-                let profileTitle = "\(profile.name) (\(certInfo), exp: \(formatter.string(from: profile.expirationDate)))"
+                let mismatchNote = SigningProfileRules.matches(profile.bundleIdentifier, bundleID) ? "" : " · App ID mismatch"
+                let profileTitle = "\(profile.name) (\(certInfo), exp: \(formatter.string(from: profile.expirationDate)))\(mismatchNote)"
 
                 alert.addAction(UIAlertAction(title: profileTitle, style: .default) { _ in
                     continuation.resume(returning: .profile(profile))

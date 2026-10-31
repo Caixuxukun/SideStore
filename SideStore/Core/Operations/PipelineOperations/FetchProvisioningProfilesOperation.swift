@@ -38,7 +38,7 @@ class FetchProvisioningProfilesOperation: BasePipelineOperation<InstallAppOperat
             guard let certificate = self.context.targetSigningCertificate else {
                 throw OperationError.invalidParameters("An imported profile requires its matching .p12.")
             }
-            try ProfileManager.shared.validate(overrideProfile, certificate: certificate, bundleID: effectiveBundleId)
+            try ProfileManager.shared.validate(overrideProfile, certificate: certificate, bundleID: effectiveBundleId, allowBundleIDMismatch: true)
             self.debugLog("[FetchProvisioningProfiles] Using override provisioning profile '\(overrideProfile.name)' (\(overrideProfile.uuid)) for \(effectiveBundleId)")
             var profiles = [effectiveBundleId: overrideProfile]
             for appExtension in appExtensions {

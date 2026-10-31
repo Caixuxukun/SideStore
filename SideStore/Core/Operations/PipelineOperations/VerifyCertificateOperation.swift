@@ -31,7 +31,7 @@ final class VerifyCertificateOperation: BasePipelineOperation<InstallAppOperatio
 
         if let profile = context.overrideProvisioningProfile,
            let certificate = context.targetSigningCertificate {
-            try ProfileManager.shared.validate(profile, certificate: certificate, bundleID: context.targetBundleIdentifier)
+            try ProfileManager.shared.validate(profile, certificate: certificate, bundleID: context.targetBundleIdentifier, allowBundleIDMismatch: true)
             if !willResign, let installedApp = context.installedApp,
                let installedCertificate = CertificateManager.shared.getSigningCertificate(for: installedApp),
                installedCertificate.data != certificate.data {

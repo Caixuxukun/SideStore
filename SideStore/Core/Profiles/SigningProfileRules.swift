@@ -94,4 +94,26 @@ enum SigningProfileRules {
         }
         return result
     }
+
+    /// Entitlements for installers that keep the app's own Bundle ID and embed the profile's
+    /// application identifier verbatim, the way Feather and similar signing tools do. iOS verifies
+    /// the binary's entitlements against the embedded profile, not the Info.plist bundle ID.
+    ///
+    /// Wildcard values are made concrete so the signed binary never carries a literal `*`.
+    static func profileEntitlements(_ profile: [String: any Sendable], bundleID: String) -> [String: any Sendable] {
+        var result = profile
+
+        if let appID = result["application-identifier"] as? String, appID.hasSuffix(".*") {
+            result["application-identifier"] = String(appID.dropLast()) + bundleID
+        }
+
+        if let groups = result["keychain-access-groups"] as? [String] {
+            result["keychain-access-groups"] = groups.map { group -> String in
+                guard group.hasSuffix(".*") else { return group }
+                return String(group.dropLast(2)) + "." + bundleID
+            }
+        }
+
+        return result
+    }
 }

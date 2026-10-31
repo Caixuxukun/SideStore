@@ -52,7 +52,7 @@ final class UpdateAppCertificateOperation: BasePipelineOperation<InstallAppOpera
         }
         if let profile = self.context.overrideProvisioningProfile,
            let certificate = self.context.targetSigningCertificate {
-            try ProfileManager.shared.validate(profile, certificate: certificate, bundleID: self.context.targetBundleIdentifier)
+            try ProfileManager.shared.validate(profile, certificate: certificate, bundleID: self.context.targetBundleIdentifier, allowBundleIDMismatch: true)
             self.context.appendTeamID = false
         }
         self.setProgress(100)

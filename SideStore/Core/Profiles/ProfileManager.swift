@@ -194,7 +194,10 @@ public final class ProfileManager: @unchecked Sendable {
         return profile.certificates.contains { $0.data == certificateData }
     }
 
-    func validate(_ profile: ALTProvisioningProfile, certificate: ALTCertificate, bundleID: String) throws {
+    func validate(_ profile: ALTProvisioningProfile,
+                  certificate: ALTCertificate,
+                  bundleID: String,
+                  allowBundleIDMismatch: Bool = false) throws {
         guard profile.expirationDate > Date() else {
             throw OperationError.missingProvisioningProfile(reason: "Imported profile '\(profile.name)' has expired.")
         }
@@ -204,7 +207,11 @@ public final class ProfileManager: @unchecked Sendable {
         guard contains(certificate, in: profile) else {
             throw OperationError.missingProvisioningProfile(reason: "Profile '\(profile.name)' does not contain the selected signing certificate. Import its matching .p12 with private key.")
         }
-        _ = try SigningProfileRules.bundleIdentifier(profileID: profile.bundleIdentifier, requestedID: bundleID)
+        // Manifest-style signing keeps the app's own Bundle ID and embeds the profile's
+        // application identifier, so a Bundle ID mismatch is allowed there.
+        if !allowBundleIDMismatch {
+            _ = try SigningProfileRules.bundleIdentifier(profileID: profile.bundleIdentifier, requestedID: bundleID)
+        }
     }
 
     func matchingProfile(for bundleID: String, certificate: ALTCertificate) -> ALTProvisioningProfile? {

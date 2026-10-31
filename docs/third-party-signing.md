@@ -10,13 +10,17 @@ It retains SideStore's existing sign-in, pairing and device connection setup.
    For a new app, enable provisioning-profile customization and choose the imported
    profile during installation. Alternatively, activate the matching certificate:
    a compatible local profile is selected automatically.
-4. Keep the app's Bundle ID within the profile's permitted namespace. A `*`
-   profile keeps the real app Bundle ID; an exact profile requires that exact ID.
+4. The app keeps its own Bundle ID. When the profile's App ID differs, SideStore
+   signs Feather-style: the profile's `application-identifier` is embedded in the
+   entitlements and iOS accepts it, even though the Info.plist Bundle ID does not
+   match. A `*` profile is concretised to the app's Bundle ID.
 5. Retained extensions need profiles authorized for their Bundle IDs and the same
    signing certificate. A wildcard can cover both the main app and extensions.
 
-An unrelated Apple ID profile cannot authorize a third-party `.p12`. Missing or
-mismatched pairs now fail before signing. Expired profiles, mismatched device
+An unrelated Apple ID profile cannot authorize a third-party `.p12`: the profile
+must contain the selected certificate. App ID mismatches are allowed for imported
+profiles (they are signed with the profile's application identifier), while an
+Apple-ID-issued profile still has to match. Expired profiles, mismatched device
 lists, App Store-only profiles and incompatible extensions produce errors.
 The original Apple-signed profile bytes are embedded without modification.
 Certificate revocation checking retains the existing OCSP behavior.
@@ -77,17 +81,16 @@ only; signing still requires a profile for every retained extension.
 
 Apple only issues profiles for certificates that belong to the profile's team, so
 an imported third-party `.p12` can never sign an Apple-ID-issued profile. The
-profile picker and the automatic matching only consider imported profiles whose
-App ID covers the app's Bundle ID.
+automatic matching only considers imported profiles whose App ID covers the app's
+Bundle ID; the manual picker lists every imported profile and marks the rest as
+“App ID mismatch”, which are signed Feather-style as described above.
 
 When the active certificate belongs to another team and no imported profile is
-selected for the app, the install now stops in `VerifyCertificateOperation`, before
-any App ID is registered, with a message that lists the imported profiles and names
-the Bundle ID that needs to be authorized. To sign with the imported certificate,
-the profile must authorize that Bundle ID: install with a custom Bundle ID inside the
-profile's namespace when the app's own ID is outside it, then select the profile for
-the install. Otherwise activate a certificate from the signed-in Apple ID team and
-install normally.
+selected for the app, the install stops in `VerifyCertificateOperation`, before any
+App ID is registered, with a message that lists the imported profiles and why each
+one cannot be used. Select an imported profile for the app (see above) to sign with
+the third-party certificate, or activate a certificate from the signed-in Apple ID
+team and install normally.
 
 A certificate from the signed-in team that is missing from a freshly downloaded
 profile (for example after a renewal) is recovered by signing with the certificate

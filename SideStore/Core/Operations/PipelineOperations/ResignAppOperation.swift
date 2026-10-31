@@ -65,8 +65,10 @@ final class ResignAppOperation: BasePipelineOperation<InstallAppOperationContext
         let bundleIdentifier = context.targetBundleIdentifier
         let finalBundleIdentifier: String
         if let profile = context.useMainProfile ? profiles.values.first : profiles[bundleIdentifier] {
+            // An imported profile keeps the app's own Bundle ID and embeds the profile's
+            // application identifier, so no renaming is needed.
             finalBundleIdentifier = context.overrideProvisioningProfile != nil
-                ? try SigningProfileRules.bundleIdentifier(profileID: profile.bundleIdentifier, requestedID: bundleIdentifier)
+                ? bundleIdentifier
                 : profile.bundleIdentifier
         } else {
             finalBundleIdentifier = bundleIdentifier
@@ -139,7 +141,8 @@ final class ResignAppOperation: BasePipelineOperation<InstallAppOperationContext
         
         let newBundleID: String
         if context.overrideProvisioningProfile != nil {
-            newBundleID = try SigningProfileRules.bundleIdentifier(profileID: profile.bundleIdentifier, requestedID: identifier)
+            // Keep the app's Bundle ID; the profile's application identifier goes into the entitlements.
+            newBundleID = identifier
         } else {
             newBundleID = appexBundleIds[identifier] ?? profile.bundleIdentifier
         }

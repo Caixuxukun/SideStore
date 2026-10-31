@@ -137,13 +137,8 @@ final class SelectProfileViewController: UITableViewController {
 
     static func isProfileCompatible(_ profile: ALTProvisioningProfile, for installedApp: InstalledApp) -> Bool {
         guard profile.expirationDate > Date() else { return false }
-        let profileID = profile.bundleIdentifier
-        let appID = installedApp.bundleIdentifier
-        let resignedID = installedApp.resignedBundleIdentifier
-
-        guard SigningProfileRules.matches(profileID, appID) ||
-              SigningProfileRules.matches(profileID, resignedID) else { return false }
-
+        // A profile whose App ID differs can still sign Feather-style, keeping the app's Bundle ID,
+        // so only the certificate pair and the expiry decide compatibility here.
         return ProfileManager.shared.getMatchingCertificate(for: profile) != nil
     }
 
