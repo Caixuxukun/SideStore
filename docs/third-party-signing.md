@@ -70,3 +70,24 @@ that embed their own profile are unaffected, and a main app without a profile is
 still rejected as before. The fallback covers launch and install bookkeeping
 only; signing still requires a profile for every retained extension.
 
+## Imported certificate with Apple ID signing
+
+Apple only issues profiles for certificates that belong to the profile's team, so
+an imported third-party `.p12` cannot sign an Apple-ID-issued profile. The profile
+picker and the automatic matching only consider imported profiles whose App ID
+covers the app's Bundle ID; when none matches, the install falls back to Apple ID
+signing.
+
+If the active certificate is not part of the signed-in Apple ID's team (an imported
+`.p12`, or a stale account certificate), SideStore now switches to the certificate
+the downloaded profile actually authorizes, instead of failing or producing a
+signature iOS rejects with `0xe8008015`. The app is then signed with the Apple ID
+certificate and expires with it. To keep third-party signing, import a profile whose
+App ID covers the app (use a custom Bundle ID inside the profile's namespace when the
+app's own ID is outside it) and select it for the install.
+
+An Apple ID sign-in is still required for the install pipeline because preflight,
+profile fetching and database bookkeeping resolve the active team, even when an
+imported profile and `.p12` are used.
+
+

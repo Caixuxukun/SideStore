@@ -209,7 +209,30 @@ class FetchProvisioningProfilesOperation: BasePipelineOperation<InstallAppOperat
         let profile = try await DeveloperPortalProxy.shared.downloadProvisioningProfile(for: groupAppID, deviceType: DeveloperPortalProxy.currentDeviceType, team: team)
         if let certificate = self.context.targetSigningCertificate,
            !ProfileManager.shared.contains(certificate, in: profile) {
-            throw OperationError.missingProvisioningProfile(reason: "The downloaded profile does not contain your signing certificate. For a third-party .p12, import its matching .mobileprovision and select it for this app.")
+            // Apple only issues profiles for certificates that belong to the profile's team. An
+            // imported third-party .p12 (or a stale account certificate) cannot sign this profile,
+            // so sign with the certificate the profile actually authorizes instead of mixing teams,
+            // which iOS rejects at install time. Needs proper testing with third-party accounts.
+            if let authorizedCertificate = profile.certificates
+                .compactMap({ CertificateManager.shared.getSignableCertificate(for: $0.serialNumber) })
+                .first {
+                self.context.overrideSigningCertificate = authorizedCertificate
+                self.context.targetCertStatus = .valid(isCrossSigned: false)
+                self.debugLog("""
+                [FetchProvisioningProfiles] Certificate '\(certificate.name)' (\(certificate.serialNumber)) is not authorized by the profile downloaded for '\(groupAppID.bundleIdentifier)'.
+                [FetchProvisioningProfiles] Switching to portal certificate '\(authorizedCertificate.name)' (\(authorizedCertificate.serialNumber)) for this install.
+                """)
+            } else {
+                let importedProfiles = ProfileManager.shared.getAllLocalProfiles()
+                    .map { "\($0.name) → \($0.bundleIdentifier)" }
+                    .joined(separator: ", ")
+                let importedProfileList = importedProfiles.isEmpty ? "none" : importedProfiles
+                throw OperationError.missingProvisioningProfile(reason: """
+                The profile downloaded from Apple for '\(groupAppID.bundleIdentifier)' does not contain signing certificate '\(certificate.name)' (\(certificate.serialNumber)), and no locally stored certificate is authorized by it.
+                Your signing certificate is not part of the signed-in Apple ID's team. Imported profiles: \(importedProfileList).
+                Import a profile that authorizes '\(groupAppID.bundleIdentifier)' and select it for this app (or install with a custom Bundle ID inside the profile's namespace), or activate your Apple ID certificate.
+                """)
+            }
         }
         self.debugLog("[FetchProvisioningProfiles] Provisioning profile fetched for \(groupAppID.bundleIdentifier) (Name: \(profile.name), Expiration: \(String(describing: profile.expirationDate)))")
         return profile
