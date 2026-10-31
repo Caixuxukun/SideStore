@@ -209,10 +209,11 @@ class FetchProvisioningProfilesOperation: BasePipelineOperation<InstallAppOperat
         let profile = try await DeveloperPortalProxy.shared.downloadProvisioningProfile(for: groupAppID, deviceType: DeveloperPortalProxy.currentDeviceType, team: team)
         if let certificate = self.context.targetSigningCertificate,
            !ProfileManager.shared.contains(certificate, in: profile) {
-            // Apple only issues profiles for certificates that belong to the profile's team. An
-            // imported third-party .p12 (or a stale account certificate) cannot sign this profile,
-            // so sign with the certificate the profile actually authorizes instead of mixing teams,
-            // which iOS rejects at install time. Needs proper testing with third-party accounts.
+            // Apple only issues profiles for certificates that belong to the profile's team, so the
+            // active certificate is missing from this profile. Third-party certificates are rejected
+            // earlier in VerifyCertificateOperation; reaching this point means the account certificate
+            // is stale (for example after a renewal), so recover with the certificate the profile
+            // authorizes instead of producing a signature iOS rejects. Needs proper testing.
             if let authorizedCertificate = profile.certificates
                 .compactMap({ CertificateManager.shared.getSignableCertificate(for: $0.serialNumber) })
                 .first {
@@ -229,7 +230,7 @@ class FetchProvisioningProfilesOperation: BasePipelineOperation<InstallAppOperat
                 let importedProfileList = importedProfiles.isEmpty ? "none" : importedProfiles
                 throw OperationError.missingProvisioningProfile(reason: """
                 The profile downloaded from Apple for '\(groupAppID.bundleIdentifier)' does not contain signing certificate '\(certificate.name)' (\(certificate.serialNumber)), and no locally stored certificate is authorized by it.
-                Your signing certificate is not part of the signed-in Apple ID's team. Imported profiles: \(importedProfileList).
+                Imported profiles: \(importedProfileList).
                 Import a profile that authorizes '\(groupAppID.bundleIdentifier)' and select it for this app (or install with a custom Bundle ID inside the profile's namespace), or activate your Apple ID certificate.
                 """)
             }

@@ -73,18 +73,23 @@ only; signing still requires a profile for every retained extension.
 ## Imported certificate with Apple ID signing
 
 Apple only issues profiles for certificates that belong to the profile's team, so
-an imported third-party `.p12` cannot sign an Apple-ID-issued profile. The profile
-picker and the automatic matching only consider imported profiles whose App ID
-covers the app's Bundle ID; when none matches, the install falls back to Apple ID
-signing.
+an imported third-party `.p12` can never sign an Apple-ID-issued profile. The
+profile picker and the automatic matching only consider imported profiles whose
+App ID covers the app's Bundle ID.
 
-If the active certificate is not part of the signed-in Apple ID's team (an imported
-`.p12`, or a stale account certificate), SideStore now switches to the certificate
-the downloaded profile actually authorizes, instead of failing or producing a
-signature iOS rejects with `0xe8008015`. The app is then signed with the Apple ID
-certificate and expires with it. To keep third-party signing, import a profile whose
-App ID covers the app (use a custom Bundle ID inside the profile's namespace when the
-app's own ID is outside it) and select it for the install.
+When the active certificate belongs to another team and no imported profile is
+selected for the app, the install now stops in `VerifyCertificateOperation`, before
+any App ID is registered, with a message that lists the imported profiles and names
+the Bundle ID that needs to be authorized. To sign with the imported certificate,
+the profile must authorize that Bundle ID: install with a custom Bundle ID inside the
+profile's namespace when the app's own ID is outside it, then select the profile for
+the install. Otherwise activate a certificate from the signed-in Apple ID team and
+install normally.
+
+A certificate from the signed-in team that is missing from a freshly downloaded
+profile (for example after a renewal) is recovered by signing with the certificate
+the profile authorizes, instead of producing a signature iOS rejects with
+`0xe8008015`.
 
 An Apple ID sign-in is still required for the install pipeline because preflight,
 profile fetching and database bookkeeping resolve the active team, even when an

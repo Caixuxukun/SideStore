@@ -53,6 +53,29 @@ final class VerifyCertificateOperation: BasePipelineOperation<InstallAppOperatio
         let team = try await AuthManager.shared.getAuthenticatedTeam()
         
         let bundleID = self.context.targetBundleIdentifier
+
+        // The Apple ID path can only sign with a certificate owned by the signed-in team. When the
+        // active certificate is an imported third-party .p12 and no imported profile was selected,
+        // fail here with actionable guidance instead of registering App IDs and downloading a
+        // profile that can never authorize this certificate.
+        if self.context.overrideProvisioningProfile == nil,
+           let certificate = self.context.targetSigningCertificate?.x509,
+           let certificateData = certificate.data {
+            let details = parseCertificate(derData: certificateData)
+            let belongsToAuthenticatedTeam = details.subject.contains(team.identifier) || details.issuer.contains(team.identifier)
+            if !belongsToAuthenticatedTeam {
+                let importedProfiles = ProfileManager.shared.getAllLocalProfiles()
+                    .map { "\($0.name) → \($0.bundleIdentifier)" }
+                    .joined(separator: ", ")
+                let importedProfileList = importedProfiles.isEmpty ? "none" : importedProfiles
+                throw OperationError.missingProvisioningProfile(reason: """
+                The active signing certificate '\(certificate.name)' (\(certificate.serialNumber)) belongs to another team, and no provisioning profile was selected for '\(bundleID)'.
+                Imported profiles: \(importedProfileList).
+                To sign with this certificate, import a profile that authorizes '\(bundleID)' and select it for this app (use a custom Bundle ID inside the profile's namespace when the app is outside it). To install with your Apple ID instead, activate a certificate from the signed-in team.
+                """)
+            }
+        }
+
         let (appName, installedAppSerial, initialStatus) = await self.fetchInstalledAppInitialState(bundleID: bundleID)
         var finalStatus = initialStatus
         
