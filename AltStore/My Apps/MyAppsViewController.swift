@@ -1568,15 +1568,25 @@ private extension MyAppsViewController
         }
     }
     
-    private func getPreviousBackupURL(_ installedApp: InstalledApp) -> URL
+    private func getPreviousBackupURL(_ installedApp: InstalledApp) -> URL?
     {
-        let backupURL = FileManager.default.backupDirectoryURL(for: installedApp)!
+        // The shared backup directory only exists when the signing profile grants SideStore
+        // access to its App Group, so this must not be force-unwrapped.
+        guard let backupURL = FileManager.default.backupDirectoryURL(for: installedApp) else {
+            return nil
+        }
         let backupBakURL = ImportExport.getPreviousBackupURL(backupURL)
         return backupBakURL
     }
     
     func restorePreviousBackup(for installedApp: InstalledApp){
-        let backupURL = FileManager.default.backupDirectoryURL(for: installedApp)!
+        guard let backupURL = FileManager.default.backupDirectoryURL(for: installedApp) else {
+            ToastView(
+                text: NSLocalizedString("Backups Unavailable", comment: ""),
+                detailText: NSLocalizedString("SideStore's App Group is not available with the current signing profile.", comment: "")
+            ).show(in: self)
+            return
+        }
         let backupBakURL = ImportExport.getPreviousBackupURL(backupURL)
         
         // backupBakURL is expected to exist at this point, this needs to be ensured by caller logic
@@ -2223,7 +2233,8 @@ extension MyAppsViewController
         }
         
         // have an option to restore the n-1 backup
-        if FileManager.default.fileExists(atPath: getPreviousBackupURL(installedApp).path){
+        if let previousBackupURL = getPreviousBackupURL(installedApp),
+           FileManager.default.fileExists(atPath: previousBackupURL.path) {
             backupSubmenuActions.append(restorePreviousBackupAction)
         }
         

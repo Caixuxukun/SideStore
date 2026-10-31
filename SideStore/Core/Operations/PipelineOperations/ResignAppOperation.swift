@@ -123,8 +123,80 @@ final class ResignAppOperation: BasePipelineOperation<InstallAppOperationContext
             let updatedAppExBundleId = appExtension.bundleIdentifier.replacingOccurrences(of: targetAppBundle.bundleIdentifier, with: bundleIdentifier)
             try self.prepare(appExtension, bundleID: updatedAppExBundleId, profiles: profiles, appexBundleIds: appexBundleIds)
         }
-        
+
+        // ExtensionKit extensions live in Extensions/ rather than PlugIns/, so SideSign does not
+        // manage them. Rename them into the new parent's namespace and embed the main profile so
+        // iOS accepts the app extension placeholders. Needs proper testing with ExtensionKit apps.
+        let mainProfile: ALTProvisioningProfile?
+        if let overrideProfile = context.overrideProvisioningProfile {
+            mainProfile = overrideProfile
+        } else if context.useMainProfile {
+            mainProfile = profiles.values.first
+        } else {
+            mainProfile = profiles[bundleIdentifier]
+        }
+        let updatedMainBundleID = (try? InfoPlistParser(plistURL: appBundle.infoPlistURL))?.bundleIdentifier ?? bundleIdentifier
+        try self.prepareUnmanagedAppExtensions(in: appBundle,
+                                               originalParentBundleID: targetAppBundle.bundleIdentifier,
+                                               updatedParentBundleID: updatedMainBundleID,
+                                               profile: mainProfile)
+
         return appBundleURL
+    }
+
+    /// ExtensionKit extensions are embedded in `Extensions/` instead of `PlugIns/`, so SideSign's
+    /// `appExtensions` never sees them and leaves their bundle IDs untouched. iOS then rejects the
+    /// install with "app extension placeholder ... does not match required prefix". Rename each one
+    /// into the new parent namespace and embed the main profile, which is also what the signer uses
+    /// for their entitlements.
+    private func prepareUnmanagedAppExtensions(in appBundle: ALTApplication,
+                                               originalParentBundleID: String,
+                                               updatedParentBundleID: String,
+                                               profile: ALTProvisioningProfile?) throws {
+        let extensionsDirectoryURL = appBundle.fileURL.appendingPathComponent("Extensions", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: extensionsDirectoryURL.path) else { return }
+        guard let enumerator = FileManager.default.enumerator(at: extensionsDirectoryURL,
+                                                             includingPropertiesForKeys: [.isDirectoryKey],
+                                                             options: [.skipsHiddenFiles]) else {
+            return
+        }
+
+        for case let url as URL in enumerator {
+            guard url.pathExtension.lowercased() == "appex" else { continue }
+            let extensionURL = url.resolvingSymlinksInPath()
+            guard (try? extensionURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
+
+            let infoPlistURL = extensionURL.appendingPathComponent("Info.plist")
+            guard let parser = try? InfoPlistParser(plistURL: infoPlistURL),
+                  let originalBundleID = parser.bundleIdentifier else {
+                self.debugLog("[ResignAppOperation] Skipping unreadable ExtensionKit extension at \(extensionURL.lastPathComponent).")
+                continue
+            }
+
+            let suffix: String
+            if originalBundleID.hasPrefix(originalParentBundleID + ".") {
+                suffix = String(originalBundleID.dropFirst(originalParentBundleID.count))
+            } else {
+                suffix = "." + extensionURL.deletingPathExtension().lastPathComponent
+            }
+            let updatedBundleID = updatedParentBundleID + suffix
+
+            var infoPlist = parser.rawDictionary as [String: Any]
+            infoPlist[kCFBundleIdentifierKey as String] = updatedBundleID
+            try InfoPlistParser(dictionary: infoPlist).write(to: infoPlistURL)
+
+            if let profile = profile {
+                try profile.data.write(to: extensionURL.appendingPathComponent("embedded.mobileprovision"), options: .atomic)
+            }
+
+            let codeSignatureURL = extensionURL.appendingPathComponent("_CodeSignature")
+            if FileManager.default.fileExists(atPath: codeSignatureURL.path) {
+                try FileManager.default.removeItem(at: codeSignatureURL)
+            }
+
+            self.debugLog("[ResignAppOperation] Prepared ExtensionKit extension '\(originalBundleID)' as '\(updatedBundleID)' (profile: \(profile?.name ?? "none")).")
+            enumerator.skipDescendants()
+        }
     }
     
     private func prepare(_ appBundle: ALTApplication, bundleID identifier: String?, additionalInfoDictionaryValues: [String: Any] = [:], profiles: [String: ALTProvisioningProfile], appexBundleIds: [String: String]) throws {
