@@ -558,10 +558,31 @@ final class PipelineHandler: PipelineExecutionHandler,
             return .defaultProfile
         }
 
-        let allProfiles = ProfileManager.shared.getAllLocalProfiles().filter {
+        let importedProfiles = ProfileManager.shared.getAllLocalProfiles()
+        let allProfiles = importedProfiles.filter {
             SigningProfileRules.matches($0.bundleIdentifier, bundleID)
         }
         guard !allProfiles.isEmpty else {
+            if !importedProfiles.isEmpty {
+                let profileList = importedProfiles
+                    .map { "• \($0.name): App ID \($0.bundleIdentifier)" }
+                    .joined(separator: "\n")
+                let message = String(
+                    format: NSLocalizedString("You imported %ld provisioning profile(s), but none authorizes '%@'.\n\n%@\n\nTo sign this app with an imported certificate, install it with a custom Bundle ID inside the profile's App ID namespace and then select the profile. Otherwise this install uses your Apple ID.", comment: ""),
+                    importedProfiles.count, bundleID, profileList
+                )
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    let alert = UIAlertController(
+                        title: NSLocalizedString("No Matching Provisioning Profile", comment: ""),
+                        message: message,
+                        preferredStyle: .alert
+                    )
+                    alert.addAction(UIAlertAction(title: NSLocalizedString("Continue", comment: ""), style: .default) { _ in
+                        continuation.resume()
+                    })
+                    presenter.present(alert, animated: true)
+                }
+            }
             return .defaultProfile
         }
 

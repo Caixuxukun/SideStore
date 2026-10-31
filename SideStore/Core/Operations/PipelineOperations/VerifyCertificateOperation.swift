@@ -65,12 +65,29 @@ final class VerifyCertificateOperation: BasePipelineOperation<InstallAppOperatio
             let belongsToAuthenticatedTeam = details.subject.contains(team.identifier) || details.issuer.contains(team.identifier)
             if !belongsToAuthenticatedTeam {
                 let importedProfiles = ProfileManager.shared.getAllLocalProfiles()
-                    .map { "\($0.name) → \($0.bundleIdentifier)" }
-                    .joined(separator: ", ")
-                let importedProfileList = importedProfiles.isEmpty ? "none" : importedProfiles
+                let diagnostics: String
+                if importedProfiles.isEmpty {
+                    diagnostics = "No provisioning profiles are imported."
+                } else {
+                    let lines = importedProfiles.map { profile -> String in
+                        var problems: [String] = []
+                        if !SigningProfileRules.matches(profile.bundleIdentifier, bundleID) {
+                            problems.append("its App ID '\(profile.bundleIdentifier)' does not authorize '\(bundleID)'")
+                        }
+                        if let activeCertificate = self.context.targetSigningCertificate,
+                           !ProfileManager.shared.contains(activeCertificate, in: profile) {
+                            problems.append("it does not contain the active certificate '\(activeCertificate.serialNumber)'")
+                        }
+                        if profile.expirationDate <= Date() {
+                            problems.append("it is expired")
+                        }
+                        return "• \(profile.name): \(problems.isEmpty ? "usable" : problems.joined(separator: "; "))"
+                    }
+                    diagnostics = "Imported profiles:\n" + lines.joined(separator: "\n")
+                }
                 throw OperationError.missingProvisioningProfile(reason: """
-                The active signing certificate '\(certificate.name)' (\(certificate.serialNumber)) belongs to another team, and no provisioning profile was selected for '\(bundleID)'.
-                Imported profiles: \(importedProfileList).
+                The active signing certificate '\(certificate.name)' (\(certificate.serialNumber)) belongs to another team, and no provisioning profile can be used for '\(bundleID)'.
+                \(diagnostics)
                 To sign with this certificate, import a profile that authorizes '\(bundleID)' and select it for this app (use a custom Bundle ID inside the profile's namespace when the app is outside it). To install with your Apple ID instead, activate a certificate from the signed-in team.
                 """)
             }
