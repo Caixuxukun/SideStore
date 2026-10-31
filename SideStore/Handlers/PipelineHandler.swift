@@ -339,9 +339,9 @@ final class PipelineHandler: PipelineExecutionHandler,
     }
 
     @MainActor
-    func resolveBundleIDOverride(initialBundleID: String) async throws -> (customID: String, appendTeamID: Bool)? {
+    func resolveBundleIDOverride(initialBundleID: String, appendTeamID: Bool) async throws -> (customID: String, appendTeamID: Bool)? {
         guard let presenter = self.activePresenter else {
-            return (initialBundleID, true)
+            return (initialBundleID, appendTeamID)
         }
         
         let titleText = NSLocalizedString("AppID Customization", comment: "")
@@ -353,13 +353,11 @@ final class PipelineHandler: PipelineExecutionHandler,
             preferredStyle: .alert
         )
         
-        let team = try await AuthManager.shared.getAuthenticatedTeam()
-        debugLog("[PipelineHandler] resolveBundleIDOverride: initialBundleID='\(initialBundleID)', teamID='\(team.identifier)', isAuthenticated=\(AuthManager.shared.isAuthenticated)")
-        let teamID = team.identifier
-        guard !teamID.isEmpty else {
-            debugLog("[PipelineHandler] resolveBundleIDOverride FAILED: teamID is empty")
-            throw OperationError.invalidParameters("Active developer team identifier is empty.")
-        }
+        // Imported profiles don't need an Apple ID; only append the team ID when one is available.
+        let team = try? await AuthManager.shared.getAuthenticatedTeam()
+        debugLog("[PipelineHandler] resolveBundleIDOverride: initialBundleID='\(initialBundleID)', teamID='\(team?.identifier ?? "")', isAuthenticated=\(AuthManager.shared.isAuthenticated)")
+        let teamID = team?.identifier ?? ""
+        let shouldAppendTeamIDSuffix = appendTeamID && !teamID.isEmpty
         let cleanInitialID: String = {
             let trimmed = initialBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
             let base: String
@@ -373,17 +371,19 @@ final class PipelineHandler: PipelineExecutionHandler,
             return sanitized
         }()
 
-        let checkboxView = AppendTeamIDCheckboxView(isChecked: true, teamID: teamID)
+        let checkboxView = AppendTeamIDCheckboxView(isChecked: shouldAppendTeamIDSuffix, teamID: teamID)
         checkboxView.translatesAutoresizingMaskIntoConstraints = false
 
         alert.addTextField { textField in
-            let initialText = !teamID.isEmpty ? "\(cleanInitialID).\(teamID)" : cleanInitialID
+            let initialText = shouldAppendTeamIDSuffix ? "\(cleanInitialID).\(teamID)" : cleanInitialID
             verboseLog("[PipelineHandler] resolveBundleIDOverride: setting textField.text='\(initialText)'")
             textField.text = initialText
             textField.autocapitalizationType = .none
             textField.autocorrectionType = .no
             textField.clearButtonMode = .whileEditing
-            checkboxView.attach(to: textField, teamID: teamID)
+            if shouldAppendTeamIDSuffix {
+                checkboxView.attach(to: textField, teamID: teamID)
+            }
         }
         
         alert.addTextField { textField in
@@ -423,21 +423,24 @@ final class PipelineHandler: PipelineExecutionHandler,
                 subview.alpha = 0
             }
             
-            container.addSubview(checkboxView)
-            NSLayoutConstraint.activate([
-                checkboxView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-                checkboxView.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16),
-                checkboxView.centerYAnchor.constraint(equalTo: container.centerYAnchor)
-            ])
+            if shouldAppendTeamIDSuffix {
+                container.addSubview(checkboxView)
+                NSLayoutConstraint.activate([
+                    checkboxView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+                    checkboxView.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16),
+                    checkboxView.centerYAnchor.constraint(equalTo: container.centerYAnchor)
+                ])
+            }
         }
         
         return await withCheckedContinuation { continuation in
             let okAction = UIAlertAction(title: NSLocalizedString("Confirm", comment: ""), style: .default) { _ in
-                let baseID = checkboxView.cleanBaseID()
+                let typedID = alert.textFields?.first?.text ?? cleanInitialID
+                let baseID = shouldAppendTeamIDSuffix ? checkboxView.cleanBaseID() : typedID
                 let customID = InfoPlistParser.sanitizeBundleID(!baseID.isEmpty ? baseID : cleanInitialID)
-                let appendTeamID = checkboxView.isChecked
-                debugLog("[PipelineHandler] resolveBundleIDOverride confirmed: baseID='\(baseID)', customID='\(customID)', appendTeamID=\(appendTeamID)")
-                continuation.resume(returning: (customID, appendTeamID))
+                let confirmedAppendTeamID = shouldAppendTeamIDSuffix && checkboxView.isChecked
+                debugLog("[PipelineHandler] resolveBundleIDOverride confirmed: baseID='\(baseID)', customID='\(customID)', appendTeamID=\(confirmedAppendTeamID)")
+                continuation.resume(returning: (customID, confirmedAppendTeamID))
             }
             
             let cancelAction = UIAlertAction(title: NSLocalizedString("Cancel", comment: ""), style: .cancel) { _ in

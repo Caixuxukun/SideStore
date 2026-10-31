@@ -65,7 +65,7 @@ enum ProfileCustomizationChoice: Sendable {
 }
 
 protocol UserCustomizationHandler: AnyObject, Sendable {
-    func resolveBundleIDOverride(initialBundleID: String) async throws -> (customID: String, appendTeamID: Bool)?
+    func resolveBundleIDOverride(initialBundleID: String, appendTeamID: Bool) async throws -> (customID: String, appendTeamID: Bool)?
     func resolveInfoPlistCustomization(
         targets: [InfoPlistTarget],
         initialBundleID: String,

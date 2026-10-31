@@ -48,6 +48,9 @@ version and submodules, then verify on a test device:
 - Sign the IPA with an external tool that provisions only the main app, then
   launch SideStore; the widget extension should inherit the main profile instead
   of blocking the first launch.
+- Install with a matching imported profile while signed out: no App ID should be
+  registered, no Team ID should be appended, and the app should be signed with the
+  imported certificate.
 
 No real certificates, private keys, passwords or device identifiers are included
 in the tests.
@@ -91,8 +94,10 @@ profile (for example after a renewal) is recovered by signing with the certifica
 the profile authorizes, instead of producing a signature iOS rejects with
 `0xe8008015`.
 
-An Apple ID sign-in is still required for the install pipeline because preflight,
-profile fetching and database bookkeeping resolve the active team, even when an
-imported profile and `.p12` are used.
+When an imported profile covers the app's Bundle ID and contains the active
+certificate, it is resolved before customization and the install runs without an
+Apple ID: the team ID suffix is not appended, preflight and installation skip the
+team lookup, and no App ID is registered on the portal. A signed-in Apple ID is
+still required when no usable imported profile is found.
 
 

@@ -35,13 +35,26 @@ final class UserCustomizationOperation: BasePipelineOperation<InstallAppOperatio
             throw OperationError.invalidParameters("UserCustomizationOperation: context.targetAppBundle is nil")
         }
 
+        // Resolve an imported profile before customization so third-party installs neither
+        // append the Apple ID team identifier to the Bundle ID nor require a signed-in account.
+        if context.overrideProvisioningProfile == nil,
+           let certificate = context.targetSigningCertificate {
+            let assignedProfile = ProfileManager.shared.getAssignedProfile(for: context.targetBundleIdentifier)
+            let matchedProfile = assignedProfile ?? ProfileManager.shared.matchingProfile(for: context.targetBundleIdentifier, certificate: certificate)
+            if let profile = matchedProfile {
+                context.overrideProvisioningProfile = profile
+                context.appendTeamID = false
+                debugLog("[UserCustomizationOperation] Using imported profile '\(profile.name)' for '\(context.targetBundleIdentifier)'; team ID suffix disabled.")
+            }
+        }
+
         if UserDefaults.standard.customizeInfoPlist {
-            let authTeam = try await AuthManager.shared.getAuthenticatedTeam()
-            let teamID = authTeam.identifier
+            let authTeam = try? await AuthManager.shared.getAuthenticatedTeam()
+            let teamID = authTeam?.identifier ?? ""
             debugLog("[UserCustomizationOperation] targetBundleIdentifier='\(context.targetBundleIdentifier)', authTeamID='\(teamID)', appendTeamID=\(context.appendTeamID)")
-            guard !teamID.isEmpty else {
-                debugLog("[UserCustomizationOperation] FAILED: authTeamID is empty")
-                throw OperationError.invalidParameters("Active developer team identifier is missing.")
+            guard !teamID.isEmpty || context.overrideProvisioningProfile != nil else {
+                debugLog("[UserCustomizationOperation] FAILED: no authenticated team and no imported profile")
+                throw OperationError.notAuthenticated
             }
 
             // Fetch installed apps to detect existing installations by authoritative bundle ID
@@ -127,7 +140,7 @@ final class UserCustomizationOperation: BasePipelineOperation<InstallAppOperatio
             let initialBundleID = context.targetBundleIdentifier
             self.setProgress(40)
             
-            guard let result = try await handler.resolveBundleIDOverride(initialBundleID: initialBundleID) else {
+            guard let result = try await handler.resolveBundleIDOverride(initialBundleID: initialBundleID, appendTeamID: context.appendTeamID) else {
                 throw OperationError.cancelled
             }
             
@@ -140,7 +153,7 @@ final class UserCustomizationOperation: BasePipelineOperation<InstallAppOperatio
         }
 
         if UserDefaults.standard.customizeEntitlements {
-            let authTeam = try await AuthManager.shared.getAuthenticatedTeam()
+            let authTeam = try? await AuthManager.shared.getAuthenticatedTeam()
             let mainTargetID = context.targetBundleIdentifier
             self.setProgress(70)
 
@@ -194,7 +207,7 @@ final class UserCustomizationOperation: BasePipelineOperation<InstallAppOperatio
 
             guard let result = try await handler.resolveEntitlementsCustomization(
                 targets: targets,
-                teamType: authTeam.type
+                teamType: authTeam?.type ?? .unknown
             ) else {
                 throw OperationError.cancelled
             }

@@ -30,7 +30,13 @@ final class PreflightChecksOperation: BasePipelineOperation<StandaloneOperationC
         try await super.executePreconditionCheck(parentProgress: parentProgress)
         self.setProgress(10)
 
-        let currentTeam = try await AuthManager.shared.getAuthenticatedTeam()
+        // Imported profiles can install without an Apple ID; skip the SideStore bundle ID checks
+        // when no team is available instead of failing the whole pipeline.
+        guard let currentTeam = try? await AuthManager.shared.getAuthenticatedTeam() else {
+            debugLog("[PreflightChecksOperation] No authenticated team; skipping SideStore bundle ID checks.")
+            self.setProgress(100)
+            return true
+        }
         let currentTeamID = currentTeam.identifier
 
         let startProgress = self.progress.completedUnitCount

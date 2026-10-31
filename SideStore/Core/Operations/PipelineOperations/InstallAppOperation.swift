@@ -57,7 +57,8 @@ final class InstallAppOperation: BasePipelineOperation<InstallAppOperationContex
         let backgroundContext = self.context.dbBackgroundContext
         
         self.setProgress(10)
-        let authTeam = try await AuthManager.shared.getAuthenticatedTeam()
+        // Imported profiles don't need an Apple ID; only associate a team when one is available.
+        let authTeam = try? await AuthManager.shared.getAuthenticatedTeam()
         do {
             let installedApp = try await installApp(
                 in: backgroundContext,
@@ -94,7 +95,7 @@ final class InstallAppOperation: BasePipelineOperation<InstallAppOperationContex
                             resignedAppBundle: ALTApplication,
                             provisioningProfiles: [String: ALTProvisioningProfile],
                             storeBuildVersion: String?,
-                            authTeam: ALTTeam) async throws -> InstalledApp
+                            authTeam: ALTTeam?) async throws -> InstalledApp
     {
         let (installedApp, isDifferentSideStore, bundleID, isSelfReinstall, isSideBackup) = try await backgroundContext.perform {
             let utis = resignedAppBundle.infoPlist[Bundle.Info.exportedUTIs] as? [[String: Any]]
@@ -213,7 +214,7 @@ final class InstallAppOperation: BasePipelineOperation<InstallAppOperationContex
                                   certificate: ALTCertificate,
                                   resignedAppBundle: ALTApplication,
                                   storeBuildVersion: String?,
-                                  authTeam: ALTTeam) throws -> InstalledApp
+                                  authTeam: ALTTeam?) throws -> InstalledApp
     {
         guard let appBundleFingerprint = self.context.appBundleFingerprint else {
             throw OperationError.invalidParameters("InstallAppOperation: context.appBundleFingerprint is nil. CacheAppOperation must guarantee a fingerprint reference.")
@@ -246,9 +247,11 @@ final class InstallAppOperation: BasePipelineOperation<InstallAppOperationContex
             installedApp.customBundleIdentifier = context.customBundleIdentifier
             installedApp.useMainProfile = context.useMainProfile
             installedApp.appBundleFingerprint = appBundleFingerprint
-            let teamPredicate = NSPredicate(format: "%K == %@", #keyPath(Team.identifier), authTeam.identifier)
-            if let team = Team.first(satisfying: teamPredicate, in: backgroundContext) {
-                installedApp.team = team
+            if let authTeam = authTeam {
+                let teamPredicate = NSPredicate(format: "%K == %@", #keyPath(Team.identifier), authTeam.identifier)
+                if let team = Team.first(satisfying: teamPredicate, in: backgroundContext) {
+                    installedApp.team = team
+                }
             }
             if let storeApp {
                 let storeAppInContext = backgroundContext.object(with: storeApp.objectID) as? StoreApp
