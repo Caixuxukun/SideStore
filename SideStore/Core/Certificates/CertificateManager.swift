@@ -29,6 +29,8 @@ public struct ActiveSigningCertificate: Sendable {
 public final class CertificateManager: @unchecked Sendable {
     public static let shared = CertificateManager()
     
+    // Serials are indexed in both stores: UserDefaults is cheaper to read, while the keychain copy
+    // survives the app container being replaced by a reinstall or self-update.
     private let serialsDefaultsKey = "importedCertificateSerials"
     private let serialsKeychainKey = "importedCertificateSerialsIndex"
     private let metadataPrefix = "certMetadata_"
