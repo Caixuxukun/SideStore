@@ -5,8 +5,8 @@ on:
   workflow_dispatch:
 jobs:
   profile-rules:
-    # Intel runners have been queued for 15+ minutes lately; ARM64 capacity is usually free.
-    runs-on: macos-15
+    # macos-15/macos-15-intel capacity has been queued for a long time; try macOS 26.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - name: Compile and run profile regression tests
