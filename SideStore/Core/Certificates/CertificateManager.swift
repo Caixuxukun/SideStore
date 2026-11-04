@@ -33,6 +33,21 @@ public final class CertificateManager: @unchecked Sendable {
     private let metadataPrefix = "certMetadata_"
     
     public private(set) var activeCertificate: ActiveSigningCertificate?
+
+    /// Imported certificates are mirrored on disk as well as in the keychain. Keychain writes
+    /// depend on the app's keychain-access-groups entitlement, which third-party signing profiles
+    /// may not grant, so without the mirror a non-activated import disappears after a restart.
+    private var importedCertificatesDirectory: URL {
+        let url = FileManager.default.applicationSupportDirectory.appendingPathComponent("ImportedCertificates", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        }
+        return url
+    }
+
+    private func importedCertificateFileURL(serialNumber: String) -> URL {
+        importedCertificatesDirectory.appendingPathComponent("\(serialNumber).p12")
+    }
     
     private init() {
         _ = try? loadActiveCertificate()
@@ -130,16 +145,32 @@ public final class CertificateManager: @unchecked Sendable {
         debugLog("[CertificateManager] saveCertificate started for serial: \(cert.serialNumber)")
         defer { debugLog("[CertificateManager] saveCertificate completed for serial: \(cert.serialNumber)") }
         
+        var persisted = false
         do {
             let password = getPassword(for: cert)
             let p12Data = try Self.convert(cert, password: password)
             debugLog("[CertificateManager] p12Data generated, size: \(p12Data.count)")
             Keychain.shared[certificateSerial: cert.serialNumber] = p12Data
-            debugLog("[CertificateManager] Successfully saved p12 to keychain")
+            if Keychain.shared[certificateSerial: cert.serialNumber] != nil {
+                persisted = true
+                debugLog("[CertificateManager] Successfully saved p12 to keychain")
+            }
+            do {
+                try p12Data.write(to: importedCertificateFileURL(serialNumber: cert.serialNumber), options: .atomic)
+                persisted = true
+                debugLog("[CertificateManager] Successfully mirrored p12 on disk")
+            } catch {
+                debugLog("[CertificateManager] Failed to mirror p12 on disk: \(error)")
+            }
         } catch {
             debugLog("[CertificateManager] Failed to export/save p12 to keychain: \(error)")
         }
-        
+
+        guard persisted else {
+            debugLog("[CertificateManager] Certificate \(cert.serialNumber) could not be persisted; not recording it as imported.")
+            return
+        }
+
         let serials = getImportedCertificateSerials()
         if !serials.contains(cert.serialNumber) {
             var updatedSerials = serials
@@ -163,6 +194,8 @@ public final class CertificateManager: @unchecked Sendable {
         if let derData = x509.data {
             debugLog("[CertificateManager] derData exists, size: \(derData.count)")
             Keychain.shared[certificateSerial: x509.serialNumber] = derData
+            // A certificate-only entry replaces any mirrored p12, so drop the private key copy.
+            try? FileManager.default.removeItem(at: importedCertificateFileURL(serialNumber: x509.serialNumber))
             debugLog("[CertificateManager] Successfully saved der to keychain")
         }
         
@@ -186,20 +219,29 @@ public final class CertificateManager: @unchecked Sendable {
         if let active = self.activeCertificate, active.serialNumber == serialNumber {
             return active.certificate
         }
-        if let data = Keychain.shared[certificateSerial: serialNumber] {
-            if data.isPKCS12 {
-                let savedPassword = getPassword(for: serialNumber)
-                if var cert = try? Self.parse(data, password: savedPassword) {
-                    if let metadata = getCertificateMetadata(for: serialNumber) {
-                        cert.machineIdentifier = metadata["machineIdentifier"]
-                        cert.machineName = metadata["machineName"]
-                        cert.requesterEmail = metadata["requesterEmail"]
-                    }
-                    return cert
-                }
-            }
+        if let data = Keychain.shared[certificateSerial: serialNumber], data.isPKCS12,
+           var cert = try? Self.parse(data, password: getPassword(for: serialNumber)) {
+            self.applyCertificateMetadata(to: &cert, serialNumber: serialNumber)
+            return cert
+        }
+        // Disk mirror: third-party signing profiles may not grant keychain access, so recover the
+        // p12 from the app sandbox and backfill the keychain entry when possible.
+        if let data = try? Data(contentsOf: importedCertificateFileURL(serialNumber: serialNumber)),
+           data.isPKCS12,
+           var cert = try? Self.parse(data, password: getPassword(for: serialNumber)) {
+            Keychain.shared[certificateSerial: serialNumber] = data
+            self.applyCertificateMetadata(to: &cert, serialNumber: serialNumber)
+            debugLog("[CertificateManager] Recovered certificate \(serialNumber) from the disk mirror.")
+            return cert
         }
         return nil
+    }
+
+    private func applyCertificateMetadata(to cert: inout ALTCertificate, serialNumber: String) {
+        guard let metadata = getCertificateMetadata(for: serialNumber) else { return }
+        cert.machineIdentifier = metadata["machineIdentifier"]
+        cert.machineName = metadata["machineName"]
+        cert.requesterEmail = metadata["requesterEmail"]
     }
 
     public func getLocalX509Certificate(serialNumber: String) -> ALTX509Certificate? {
@@ -251,6 +293,7 @@ public final class CertificateManager: @unchecked Sendable {
             clearActiveCertificate()
         }
         Keychain.shared[certificateSerial: serialNumber] = nil
+        try? FileManager.default.removeItem(at: importedCertificateFileURL(serialNumber: serialNumber))
         setCertificateMetadata(nil, for: serialNumber)
         var serials = getImportedCertificateSerials()
         serials.removeAll { $0 == serialNumber }
