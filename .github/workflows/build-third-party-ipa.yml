@@ -8,7 +8,8 @@ permissions:
   contents: read
 jobs:
   build-ipa:
-    runs-on: macos-15-intel
+    # Intel runners have been queued for 15+ minutes lately; ARM64 capacity is usually free.
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
