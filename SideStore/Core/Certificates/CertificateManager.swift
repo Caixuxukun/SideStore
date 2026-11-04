@@ -29,7 +29,8 @@ public struct ActiveSigningCertificate: Sendable {
 public final class CertificateManager: @unchecked Sendable {
     public static let shared = CertificateManager()
     
-    private let serialsKey = "importedCertificateSerials"
+    private let serialsDefaultsKey = "importedCertificateSerials"
+    private let serialsKeychainKey = "importedCertificateSerialsIndex"
     private let metadataPrefix = "certMetadata_"
     
     public private(set) var activeCertificate: ActiveSigningCertificate?
@@ -454,11 +455,32 @@ public final class CertificateManager: @unchecked Sendable {
 
 private extension CertificateManager {
     func getImportedCertificateSerials() -> [String] {
-        return UserDefaults.standard.stringArray(forKey: serialsKey) ?? []
+        // The index lives in the keychain as well as UserDefaults: UserDefaults disappears when
+        // SideStore's container is replaced (reinstall/self-update), while keychain items survive.
+        var serials: [String] = []
+        if let data = Keychain.shared.data(forKey: serialsKeychainKey),
+           let decoded = try? JSONDecoder().decode([String].self, from: data) {
+            serials = decoded
+        }
+
+        let legacySerials = UserDefaults.standard.stringArray(forKey: serialsDefaultsKey) ?? []
+        var didChange = false
+        for serial in legacySerials where !serials.contains(serial) {
+            serials.append(serial)
+            didChange = true
+        }
+
+        if didChange || (Keychain.shared.data(forKey: serialsKeychainKey) == nil && !serials.isEmpty) {
+            setImportedCertificateSerials(serials)
+        }
+        return serials
     }
     
     func setImportedCertificateSerials(_ serials: [String]) {
-        UserDefaults.standard.set(serials, forKey: serialsKey)
+        UserDefaults.standard.set(serials, forKey: serialsDefaultsKey)
+        if let data = try? JSONEncoder().encode(serials) {
+            Keychain.shared.setData(data, forKey: serialsKeychainKey)
+        }
     }
     
     func getCertificateMetadata(for serial: String) -> [String: String]? {

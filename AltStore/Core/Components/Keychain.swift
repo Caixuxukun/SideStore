@@ -97,6 +97,20 @@ public class Keychain
             }
         }
     }
+
+    /// Generic storage used for small bookkeeping values that must survive an app reinstall,
+    /// such as the list of imported certificate serials (UserDefaults lives in the app container).
+    public func data(forKey key: String) -> Data? {
+        try? self.keychain.getData(key)
+    }
+
+    public func setData(_ data: Data?, forKey key: String) {
+        if let data = data {
+            try? self.keychain.set(data, key: key)
+        } else {
+            try? self.keychain.remove(key)
+        }
+    }
     
     private init()
     {
