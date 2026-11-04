@@ -2124,6 +2124,10 @@ extension MyAppsViewController
             self.enableJIT(for: installedApp)
         }
         
+        let dylibInjectionAction = UIAction(title: NSLocalizedString("Dylib Injection", comment: ""), image: UIImage(systemName: "syringe")) { [weak self] (action) in
+            self?.presentDylibInjection(for: installedApp)
+        }
+        
         let backupAction = UIAction(title: NSLocalizedString("Create Backup", comment: ""), image: UIImage(systemName: "doc.on.doc")) { (action) in
             self.backup(installedApp)
         }
@@ -2282,6 +2286,7 @@ extension MyAppsViewController
             }
             
             actions.append(changeIconMenu)
+            actions.append(dylibInjectionAction)
             
             if !backupSubmenuActions.isEmpty
             {
@@ -2331,6 +2336,7 @@ extension MyAppsViewController
             activateAction,
             jitAction,
             changeIconMenu,
+            dylibInjectionAction,
             backupMenu,
             infoAction,
             deactivateAction,
@@ -2375,6 +2381,12 @@ extension MyAppsViewController
         
         let menu = UIMenu(title: title ?? "", children: actions)
         return menu
+    }
+
+    private func presentDylibInjection(for installedApp: InstalledApp) {
+        let view = DylibInjectionView(appBundleID: installedApp.bundleIdentifier, appName: installedApp.name)
+        let hostingController = UIHostingController(rootView: view)
+        self.present(hostingController, animated: true)
     }
     
     #if !os(tvOS)

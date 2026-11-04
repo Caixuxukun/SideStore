@@ -141,6 +141,13 @@ final class ResignAppOperation: BasePipelineOperation<InstallAppOperationContext
                                                updatedParentBundleID: updatedMainBundleID,
                                                profile: mainProfile)
 
+        // Inject opted-in dylibs (tweaks and ElleKit) before the signer seals the app.
+        if !targetAppBundle.isAltStoreApp, let mainExecutableURL = appBundle.executableURL {
+            try TweaksManager.shared.inject(into: appBundle.fileURL,
+                                            mainExecutableURL: mainExecutableURL,
+                                            appBundleID: context.bundleIdentifier)
+        }
+
         return appBundleURL
     }
 
