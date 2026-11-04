@@ -8,8 +8,7 @@ permissions:
   contents: read
 jobs:
   build-ipa:
-    # macos-15/macos-15-intel capacity has been queued for a long time; try macOS 26.
-    runs-on: macos-26
+    runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
