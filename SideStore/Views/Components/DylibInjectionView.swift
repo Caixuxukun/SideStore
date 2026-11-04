@@ -27,7 +27,7 @@ struct DylibInjectionView: View {
             List {
                 Section {
                     ForEach(tweaks) { tweak in
-                        Button {
+                        SwiftUI.Button {
                             toggle(tweak)
                         } label: {
                             HStack {
@@ -59,10 +59,10 @@ struct DylibInjectionView: View {
             .navigationTitle("Dylib Injection")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    SwiftUI.Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Import") { isImporting = true }
+                    SwiftUI.Button("Import") { isImporting = true }
                 }
             }
             .fileImporter(
@@ -94,7 +94,7 @@ struct DylibInjectionView: View {
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
             )) {
-                Button("OK", role: .cancel) { errorMessage = nil }
+                SwiftUI.Button("OK", role: .cancel) { errorMessage = nil }
             } message: {
                 Text(errorMessage ?? "")
             }

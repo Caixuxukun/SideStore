@@ -116,7 +116,8 @@ enum MachOInjector {
         pathBytes.append(contentsOf: repeatElement(0, count: commandSize - unpaddedSize))
 
         var command = Data(capacity: commandSize)
-        for value: UInt32 in [lcLoadDylib, UInt32(commandSize), 24, 0, 0, 0] {
+        let headerFields: [UInt32] = [lcLoadDylib, UInt32(commandSize), 24, 0, 0, 0]
+        for value in headerFields {
             command.append(UInt8(value & 0xFF))
             command.append(UInt8((value >> 8) & 0xFF))
             command.append(UInt8((value >> 16) & 0xFF))
