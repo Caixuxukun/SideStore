@@ -255,8 +255,16 @@ class CertificatesViewModel: ObservableObject {
                         failedImportsList.append("\(pending.filename): Duplicate certificate (already imported).")
                         importFailedCount += 1
                     } else {
-                        saveLocalCertificate(altCert)
-                        recordSuccessfulImport(serial: altCert.serialNumber, hasPrivateKey: true, filename: pending.filename)
+                        do {
+                            try CertificateManager.shared.importCertificate(altCert,
+                                                                           originalP12Data: certData,
+                                                                           password: lastUsedPassword,
+                                                                           filename: pending.filename)
+                            recordSuccessfulImport(serial: altCert.serialNumber, hasPrivateKey: true, filename: pending.filename)
+                        } catch {
+                            failedImportsList.append("\(pending.filename): \(error.localizedDescription)")
+                            importFailedCount += 1
+                        }
                     }
                     currentImportIndex += 1
                     processNextImport()
@@ -277,8 +285,16 @@ class CertificatesViewModel: ObservableObject {
                     failedImportsList.append("\(pending.filename): Duplicate certificate (already imported).")
                     importFailedCount += 1
                 } else {
-                    saveLocalCertificate(altCert)
-                    recordSuccessfulImport(serial: altCert.serialNumber, hasPrivateKey: true, filename: pending.filename)
+                    do {
+                        try CertificateManager.shared.importCertificate(altCert,
+                                                                       originalP12Data: certData,
+                                                                       password: nil,
+                                                                       filename: pending.filename)
+                        recordSuccessfulImport(serial: altCert.serialNumber, hasPrivateKey: true, filename: pending.filename)
+                    } catch {
+                        failedImportsList.append("\(pending.filename): \(error.localizedDescription)")
+                        importFailedCount += 1
+                    }
                 }
                 currentImportIndex += 1
                 processNextImport()
@@ -326,8 +342,16 @@ class CertificatesViewModel: ObservableObject {
                 failedImportsList.append("\(pending.filename): Duplicate certificate (already imported).")
                 importFailedCount += 1
             } else {
-                saveLocalCertificate(altCert)
-                recordSuccessfulImport(serial: altCert.serialNumber, hasPrivateKey: true, filename: pending.filename)
+                do {
+                    try CertificateManager.shared.importCertificate(altCert,
+                                                                   originalP12Data: certData,
+                                                                   password: importPasswordInput,
+                                                                   filename: pending.filename)
+                    recordSuccessfulImport(serial: altCert.serialNumber, hasPrivateKey: true, filename: pending.filename)
+                } catch {
+                    failedImportsList.append("\(pending.filename): \(error.localizedDescription)")
+                    importFailedCount += 1
+                }
             }
             self.lastUsedPassword = importPasswordInput
             self.showPasswordPromptForImport = false

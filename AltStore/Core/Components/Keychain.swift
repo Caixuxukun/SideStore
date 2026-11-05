@@ -7,7 +7,6 @@
 //
 
 import Foundation
-import Security
 private import KeychainAccess
 import SideSign
 
@@ -97,42 +96,6 @@ public class Keychain
                 try? self.keychain.remove("importedCert_" + serial)
             }
         }
-    }
-
-    /// Generic storage used for small bookkeeping values that must survive an app reinstall,
-    /// such as the list of imported certificate serials (UserDefaults lives in the app container).
-    public func data(forKey key: String) -> Data? {
-        try? self.keychain.getData(key)
-    }
-
-    public func setData(_ data: Data?, forKey key: String) {
-        if let data = data {
-            try? self.keychain.set(data, key: key)
-        } else {
-            try? self.keychain.remove(key)
-        }
-    }
-
-    /// Lists account names stored for SideStore's keychain service, so callers can recover
-    /// entries whose index was lost (for example imported certificate p12 items).
-    public func allKeys(withPrefix prefix: String) -> [String] {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Bundle.Info.appbundleIdentifier,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecAttrSynchronizable as String: kSecAttrSynchronizableAny
-        ]
-
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let items = result as? [[String: Any]] else {
-            if status != errSecItemNotFound {
-                debugLog("[Keychain] Failed to enumerate keys: \(status)")
-            }
-            return []
-        }
-        return items.compactMap { $0[kSecAttrAccount as String] as? String }.filter { $0.hasPrefix(prefix) }
     }
     
     private init()
