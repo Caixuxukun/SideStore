@@ -118,6 +118,18 @@ final class ResignAppOperation: BasePipelineOperation<InstallAppOperationContext
         // Prepare app
         try self.prepare(appBundle, bundleID: bundleIdentifier, additionalInfoDictionaryValues: additionalValues, profiles: profiles, appexBundleIds: appexBundleIds)
         try self.removeMissingAppExtensionReferences(from: appBundle)
+
+        // Drop private keys embedded by older builds (or carried by the source IPA). Only
+        // SideStore itself keeps its own p12 for self-refresh recovery.
+        if !targetAppBundle.isAltStoreApp {
+            for name in ["ALTCertificate.p12", "ALTCertificate.der"] {
+                let embeddedCertificateURL = appBundle.fileURL.appendingPathComponent(name)
+                if FileManager.default.fileExists(atPath: embeddedCertificateURL.path) {
+                    try? FileManager.default.removeItem(at: embeddedCertificateURL)
+                    debugLog("[ResignAppOperation] Removed previously embedded \(name) from '\(targetAppBundle.bundleIdentifier)'.")
+                }
+            }
+        }
         
         for appExtension in appBundle.appExtensions {
             let updatedAppExBundleId = appExtension.bundleIdentifier.replacingOccurrences(of: targetAppBundle.bundleIdentifier, with: bundleIdentifier)

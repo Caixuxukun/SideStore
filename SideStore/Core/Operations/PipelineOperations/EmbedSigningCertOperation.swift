@@ -34,6 +34,14 @@ final class EmbedSigningCertOperation: BasePipelineOperation<InstallAppOperation
         guard let appBundle = self.context.targetAppBundle else {
             throw OperationError.invalidParameters("EmbedSigningCertOperation: targetAppBundle is missing in context.")
         }
+
+        // Only SideStore itself needs its p12 inside the bundle, so it can recover its signing
+        // certificate for self-refreshes. Embedding the signing private key in every installed app
+        // would hand the key to anyone who extracts that app's IPA. Needs proper testing.
+        guard appBundle.isAltStoreApp else {
+            debugLog("[EmbedSigningCertOperation] Skipping certificate embedding for non-SideStore app '\(appBundle.bundleIdentifier)'.")
+            return
+        }
         
         let p12Password = CertificateManager.shared.getPassword(for: cert)
         
