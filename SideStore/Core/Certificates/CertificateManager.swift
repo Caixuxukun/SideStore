@@ -472,6 +472,26 @@ private extension CertificateManager {
             didChange = true
         }
 
+        // Recover certificates whose index entry was lost. Older builds kept the index only in
+        // UserDefaults, so the p12 items (keychain) and mirrors (disk) can outlive it.
+        let keychainPrefix = "importedCert_"
+        for key in Keychain.shared.allKeys(withPrefix: keychainPrefix) {
+            let serial = String(key.dropFirst(keychainPrefix.count))
+            if !serials.contains(serial) {
+                serials.append(serial)
+                didChange = true
+            }
+        }
+        if let mirrorFiles = try? FileManager.default.contentsOfDirectory(at: importedCertificatesDirectory, includingPropertiesForKeys: nil) {
+            for file in mirrorFiles where file.pathExtension.lowercased() == "p12" {
+                let serial = file.deletingPathExtension().lastPathComponent
+                if !serials.contains(serial) {
+                    serials.append(serial)
+                    didChange = true
+                }
+            }
+        }
+
         if didChange || (Keychain.shared.data(forKey: serialsKeychainKey) == nil && !serials.isEmpty) {
             setImportedCertificateSerials(serials)
         }
