@@ -50,8 +50,20 @@ final class LocalItmsInstaller: @unchecked Sendable {
 
         let server = LocalItmsHTTPServer(ipaURL: ipaURL)
         try server.start()
-        let host = Self.preferredHost()
+
+        // Installd may be unable to reach a VPN/utun address, and loopback is blocked on some iOS
+        // versions. Probe every candidate from inside the app first and advertise the one that works.
+        let candidates = Self.candidateHosts()
+        var host = candidates.first ?? "127.0.0.1"
+        for candidate in candidates {
+            if await Self.probe(host: candidate, port: server.port) {
+                host = candidate
+                break
+            }
+            debugLog("[LocalItmsInstaller] Probe failed for \(candidate); trying next candidate.")
+        }
         let baseURL = "http://\(host):\(server.port)"
+        debugLog("[LocalItmsInstaller] Using \(baseURL) for the itms manifest (candidates: \(candidates)).")
         server.manifestData = Self.manifestData(
             bundleIdentifier: bundleIdentifier,
             version: version,
@@ -106,45 +118,69 @@ final class LocalItmsInstaller: @unchecked Sendable {
         return (try? PropertyListSerialization.data(fromPropertyList: manifest, format: .xml, options: 0)) ?? Data()
     }
 
-    private static func preferredHost() -> String {
+    private static func candidateHosts() -> [String] {
         var wifiAddress: String?
-        var otherAddress: String?
+        var cellularAddress: String?
+        var discovered: [String] = []
 
         var interfacePointer: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&interfacePointer) == 0, let firstInterface = interfacePointer else {
-            return "127.0.0.1"
-        }
-        defer { freeifaddrs(interfacePointer) }
+        if getifaddrs(&interfacePointer) == 0, let firstInterface = interfacePointer {
+            defer { freeifaddrs(interfacePointer) }
 
-        for interface in sequence(first: firstInterface, next: { $0.pointee.ifa_next }) {
-            guard let address = interface.pointee.ifa_addr else { continue }
-            guard address.pointee.sa_family == UInt8(AF_INET) else { continue }
+            for interface in sequence(first: firstInterface, next: { $0.pointee.ifa_next }) {
+                guard let address = interface.pointee.ifa_addr else { continue }
+                guard address.pointee.sa_family == UInt8(AF_INET) else { continue }
 
-            let flags = Int32(interface.pointee.ifa_flags)
-            guard (flags & IFF_UP) != 0, (flags & IFF_LOOPBACK) == 0 else { continue }
+                let flags = Int32(interface.pointee.ifa_flags)
+                guard (flags & IFF_UP) != 0, (flags & IFF_LOOPBACK) == 0 else { continue }
 
-            var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let result = getnameinfo(address,
-                                     socklen_t(address.pointee.sa_len),
-                                     &hostname,
-                                     socklen_t(hostname.count),
-                                     nil,
-                                     0,
-                                     NI_NUMERICHOST)
-            guard result == 0 else { continue }
+                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                let result = getnameinfo(address,
+                                         socklen_t(address.pointee.sa_len),
+                                         &hostname,
+                                         socklen_t(hostname.count),
+                                         nil,
+                                         0,
+                                         NI_NUMERICHOST)
+                guard result == 0 else { continue }
 
-            let candidate = String(cString: hostname)
-            guard !candidate.isEmpty, !candidate.hasPrefix("169.254.") else { continue }
+                let candidate = String(cString: hostname)
+                guard !candidate.isEmpty, !candidate.hasPrefix("169.254.") else { continue }
 
-            let name = String(cString: interface.pointee.ifa_name)
-            if name.hasPrefix("en") {
-                wifiAddress = wifiAddress ?? candidate
-            } else {
-                otherAddress = otherAddress ?? candidate
+                let name = String(cString: interface.pointee.ifa_name)
+                discovered.append("\(name)=\(candidate)")
+
+                // Feather only advertises en0/pdp_ip0: VPN/utun addresses are not reachable by installd.
+                if name == "en0" {
+                    wifiAddress = wifiAddress ?? candidate
+                } else if name == "pdp_ip0" {
+                    cellularAddress = cellularAddress ?? candidate
+                }
             }
         }
 
-        return wifiAddress ?? otherAddress ?? "127.0.0.1"
+        debugLog("[LocalItmsInstaller] Interface candidates: \(discovered)")
+
+        var hosts: [String] = []
+        for host in [wifiAddress, cellularAddress, "127.0.0.1"].compactMap({ $0 }) where !hosts.contains(host) {
+            hosts.append(host)
+        }
+        return hosts
+    }
+
+    private static func probe(host: String, port: UInt16) async -> Bool {
+        guard let url = URL(string: "http://\(host):\(port)/manifest.plist") else {
+            return false
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 2
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            return false
+        }
     }
 
     private static func percentEncode(_ string: String) -> String {
