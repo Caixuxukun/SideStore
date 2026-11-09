@@ -10,6 +10,7 @@
 
 import Foundation
 import UIKit
+import SafariServices
 import Darwin
 
 final class LocalItmsInstaller: @unchecked Sendable {
@@ -63,31 +64,48 @@ final class LocalItmsInstaller: @unchecked Sendable {
             debugLog("[LocalItmsInstaller] Probe failed for \(candidate); trying next candidate.")
         }
         let baseURL = "http://\(host):\(server.port)"
-        debugLog("[LocalItmsInstaller] Using \(baseURL) for the itms manifest (candidates: \(candidates)).")
+        let payloadURL = "\(baseURL)/itms.ipa"
+        debugLog("[LocalItmsInstaller] Using \(baseURL) for the local install (candidates: \(candidates)).")
         server.manifestData = Self.manifestData(
             bundleIdentifier: bundleIdentifier,
             version: version,
             title: displayName,
-            ipaURL: URL(string: "\(baseURL)/itms.ipa")!
+            ipaURL: URL(string: payloadURL)!
         )
         self.server = server
 
+        let startedKeepAlive = !UserDefaults.standard.isBackgroundServiceEnabled && BackgroundAudioService.shared.start()
         self.beginBackgroundTask()
         await MainActor.run { UIApplication.shared.isIdleTimerDisabled = true }
         defer {
             server.stop()
             self.server = nil
             self.endBackgroundTask()
+            if startedKeepAlive {
+                BackgroundAudioService.shared.stop()
+            }
             Task { @MainActor in UIApplication.shared.isIdleTimerDisabled = false }
         }
 
-        debugLog("[LocalItmsInstaller] Serving '\(ipaURL.lastPathComponent)' on \(baseURL) for \(bundleIdentifier).")
-        let manifestURLString = Self.percentEncode("\(baseURL)/manifest.plist")
-        guard let installURL = URL(string: "itms-services://?action=download-manifest&id=\(bundleIdentifier)&url=\(manifestURLString)") else {
+        // iOS 18+ blocks itms-services launched directly by third-party apps without special
+        // entitlements. Follow Feather: host the manifest on a public HTTPS endpoint and let a local
+        // HTML page inside a Safari view redirect to itms-services. Needs proper testing.
+        guard let manifestURL = Self.externalManifestURL(
+            bundleIdentifier: bundleIdentifier,
+            version: version,
+            title: displayName,
+            payloadURL: payloadURL
+        ) else {
             throw InstallError.cannotOpenInstallURL
         }
+        let itmsURL = "itms-services://?action=download-manifest&url=\(Self.percentEncode(manifestURL))"
+        server.installPageHTML = Self.installPageHTML(itmsURL: itmsURL)
 
-        guard await Self.open(installURL) else {
+        guard let pageURL = URL(string: "\(baseURL)/install.html") else {
+            throw InstallError.cannotOpenInstallURL
+        }
+        debugLog("[LocalItmsInstaller] Opening install page \(pageURL) with manifest \(manifestURL).")
+        guard await Self.presentInstallPage(pageURL) else {
             throw InstallError.installURLRejected
         }
 
@@ -95,6 +113,55 @@ final class LocalItmsInstaller: @unchecked Sendable {
         debugLog("[LocalItmsInstaller] installd downloaded the IPA; waiting for the install to settle.")
         // installd still has to verify and move the app into place after the download finishes.
         try await Task.sleep(nanoseconds: 5_000_000_000)
+    }
+
+    private static func externalManifestURL(bundleIdentifier: String,
+                                            version: String,
+                                            title: String,
+                                            payloadURL: String) -> String? {
+        var components = URLComponents(string: "https://api.palera.in/genPlist")
+        components?.queryItems = [
+            URLQueryItem(name: "bundleid", value: bundleIdentifier),
+            URLQueryItem(name: "name", value: title),
+            URLQueryItem(name: "version", value: version),
+            URLQueryItem(name: "fetchurl", value: payloadURL)
+        ]
+        return components?.url?.absoluteString
+    }
+
+    private static func installPageHTML(itmsURL: String) -> Data {
+        let escaped = itmsURL
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let html = """
+        <!doctype html>
+        <html>
+        <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <script>window.location.href = "\(escaped)";</script>
+        </head>
+        <body style="background:#000;color:#fff;font-family:-apple-system;padding:24px">
+        Starting installation…
+        </body>
+        </html>
+        """
+        return Data(html.utf8)
+    }
+
+    @MainActor
+    private static func presentInstallPage(_ url: URL) async -> Bool {
+        if let root = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow })
+            .first?.rootViewController {
+            var top = root
+            while let presented = top.presentedViewController {
+                top = presented
+            }
+            let safari = SFSafariViewController(url: url)
+            top.present(safari, animated: true)
+            return true
+        }
+        return await Self.open(url)
     }
 
     private static func manifestData(bundleIdentifier: String, version: String, title: String, ipaURL: URL) -> Data {
@@ -255,6 +322,7 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
     private var acceptThread: Thread?
     private(set) var port: UInt16 = 0
     var manifestData = Data()
+    var installPageHTML = Data()
 
     init(ipaURL: URL) {
         self.ipaURL = ipaURL
@@ -402,6 +470,8 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
         }
 
         switch path {
+        case "/install.html":
+            _ = sendAll(clientFD, response(status: "200 OK", contentType: "text/html; charset=utf-8", body: installPageHTML))
         case "/manifest.plist":
             _ = sendAll(clientFD, response(status: "200 OK", contentType: "application/xml", body: manifestData))
         case "/itms.ipa":
