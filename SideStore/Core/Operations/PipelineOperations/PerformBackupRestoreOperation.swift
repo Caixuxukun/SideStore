@@ -46,21 +46,7 @@ final class PerformBackupRestoreOperation: BasePipelineOperation<InstallAppOpera
         let (bundleID, fileURL, name, openAppURL) = context.performAndWait {
             (installedApp.bundleIdentifier, installedApp.fileURL, installedApp.name, installedApp.openAppURL)
         }
-
-        // Without an App Group the helper cannot hand the backup back to SideStore, so skip the
-        // step instead of failing the whole deactivate/restore operation.
-        if self.context.skipAppDataBackup {
-            self.debugLog("[BackupRestoreAppOperation] Skipping \(action.rawValue): no App Group for app data backup.")
-            return fileURL
-        }
-        if action == .restore {
-            guard let backupURL = FileManager.default.backupDirectoryURL(for: installedApp),
-                  FileManager.default.fileExists(atPath: backupURL.path) else {
-                self.debugLog("[BackupRestoreAppOperation] Skipping restore: no backup exists for \(bundleID).")
-                return fileURL
-            }
-        }
-
+        
         self.debugLog("[BackupRestoreAppOperation] Ready to open app and observe backup. InstalledApp: \(bundleID)")
         try await self.openAppAndObserve(installedApp: installedApp, bundleIdentifier: bundleID, name: name, openAppURL: openAppURL)
         self.debugLog("[BackupRestoreAppOperation] execute() completed successfully.")
