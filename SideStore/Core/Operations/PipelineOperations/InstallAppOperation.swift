@@ -220,6 +220,13 @@ final class InstallAppOperation: BasePipelineOperation<InstallAppOperationContex
             throw OperationError.invalidParameters("Local itms-services install needs the resigned IPA, but CreateIpaOperation produced none.")
         }
 
+        // Installing SideStore over itself terminates this process (and with it the local server),
+        // so the system would end up downloading an empty payload. Force the device API instead.
+        guard !resignedAppBundle.isAltStoreApp,
+              !resignedAppBundle.bundleIdentifier.hasPrefix(StoreApp.altstoreAppID) else {
+            throw OperationError.invalidParameters("Local itms-services cannot update SideStore itself. Switch Install Method back to Device API for self-updates.")
+        }
+
         let infoPlist = resignedAppBundle.infoPlist
         let version = (infoPlist["CFBundleShortVersionString"] as? String) ?? storeBuildVersion ?? "1.0"
         let title = (infoPlist["CFBundleDisplayName"] as? String)
