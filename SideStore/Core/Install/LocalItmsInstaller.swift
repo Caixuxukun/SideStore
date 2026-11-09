@@ -503,17 +503,17 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
 
         switch path {
         case "/install.html":
-            send(clientFD, method: method, status: "200 OK", contentType: "text/html; charset=utf-8", body: installPageHTML)
+            sendResponse(clientFD, method: method, status: "200 OK", contentType: "text/html; charset=utf-8", body: installPageHTML)
         case "/manifest.plist":
-            send(clientFD, method: method, status: "200 OK", contentType: "application/xml", body: manifestData)
+            sendResponse(clientFD, method: method, status: "200 OK", contentType: "application/xml", body: manifestData)
         case "/itms.ipa":
             sendIPA(clientFD, method: method, headers: requestHeaders)
         default:
-            send(clientFD, method: method, status: "404 Not Found", contentType: "text/plain", body: Data("Not Found".utf8))
+            sendResponse(clientFD, method: method, status: "404 Not Found", contentType: "text/plain", body: Data("Not Found".utf8))
         }
     }
 
-    private func send(_ clientFD: Int32, method: String, status: String, contentType: String, body: Data) {
+    private func sendResponse(_ clientFD: Int32, method: String, status: String, contentType: String, body: Data) {
         let header = "HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
         var responseData = Data(header.utf8)
         if method != "HEAD" {
@@ -524,7 +524,7 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
 
     private func sendIPA(_ clientFD: Int32, method: String, headers: [String: String]) {
         guard let fileData = try? Data(contentsOf: ipaURL, options: .mappedIfSafe) else {
-            send(clientFD, method: method, status: "404 Not Found", contentType: "text/plain", body: Data("Missing IPA".utf8))
+            sendResponse(clientFD, method: method, status: "404 Not Found", contentType: "text/plain", body: Data("Missing IPA".utf8))
             return
         }
 
