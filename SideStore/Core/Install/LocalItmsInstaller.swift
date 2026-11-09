@@ -351,6 +351,9 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
     }
 
     func start() throws {
+        // installd aborts some HTTP requests early; never let the resulting SIGPIPE kill SideStore.
+        signal(SIGPIPE, SIG_IGN)
+
         let socketFD = socket(AF_INET, SOCK_STREAM, 0)
         guard socketFD >= 0 else {
             throw ServerError.listenerFailed("socket() failed with errno \(errno)")
@@ -451,6 +454,11 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
     private func handleConnection(_ clientFD: Int32) {
         defer { close(clientFD) }
 
+        // Without this, a client that closes early (installd does a HEAD first) makes send()
+        // raise SIGPIPE, which kills SideStore in the middle of the install.
+        var noSigPipe: Int32 = 1
+        _ = setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+
         var timeout = timeval(tv_sec: 20, tv_usec: 0)
         _ = setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         _ = setsockopt(clientFD, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
@@ -470,54 +478,123 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
 
         guard let headerEnd = requestData.range(of: headerTerminator) else { return }
         let header = String(decoding: requestData[..<headerEnd.lowerBound], as: UTF8.self)
-        let requestLine = header.components(separatedBy: "\r\n").first ?? ""
+        let headerLines = header.components(separatedBy: "\r\n")
+        let requestLine = headerLines.first ?? ""
         let parts = requestLine.split(separator: " ")
         guard parts.count >= 2 else { return }
 
+        let method = String(parts[0]).uppercased()
         var path = String(parts[1])
         if let queryIndex = path.firstIndex(of: "?") {
             path = String(path[..<queryIndex])
+        }
+
+        var requestHeaders: [String: String] = [:]
+        for line in headerLines.dropFirst() {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let name = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty {
+                requestHeaders[name] = value
+            }
         }
 
         debugLog("[LocalItmsHTTPServer] Request: \(requestLine)")
 
         switch path {
         case "/install.html":
-            _ = sendAll(clientFD, response(status: "200 OK", contentType: "text/html; charset=utf-8", body: installPageHTML))
+            send(clientFD, method: method, status: "200 OK", contentType: "text/html; charset=utf-8", body: installPageHTML)
         case "/manifest.plist":
-            _ = sendAll(clientFD, response(status: "200 OK", contentType: "application/xml", body: manifestData))
+            send(clientFD, method: method, status: "200 OK", contentType: "application/xml", body: manifestData)
         case "/itms.ipa":
-            sendIPA(clientFD)
+            sendIPA(clientFD, method: method, headers: requestHeaders)
         default:
-            _ = sendAll(clientFD, response(status: "404 Not Found", contentType: "text/plain", body: Data("Not Found".utf8)))
+            send(clientFD, method: method, status: "404 Not Found", contentType: "text/plain", body: Data("Not Found".utf8))
         }
     }
 
-    private func response(status: String, contentType: String, body: Data) -> Data {
-        var responseData = Data()
-        responseData.append(Data("HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8))
-        responseData.append(body)
-        return responseData
+    private func send(_ clientFD: Int32, method: String, status: String, contentType: String, body: Data) {
+        let header = "HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+        var responseData = Data(header.utf8)
+        if method != "HEAD" {
+            responseData.append(body)
+        }
+        _ = sendAll(clientFD, responseData)
     }
 
-    private func sendIPA(_ clientFD: Int32) {
+    private func sendIPA(_ clientFD: Int32, method: String, headers: [String: String]) {
         guard let fileData = try? Data(contentsOf: ipaURL, options: .mappedIfSafe) else {
-            _ = sendAll(clientFD, response(status: "404 Not Found", contentType: "text/plain", body: Data("Missing IPA".utf8)))
+            send(clientFD, method: method, status: "404 Not Found", contentType: "text/plain", body: Data("Missing IPA".utf8))
             return
         }
 
-        let header = Data("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: \(fileData.count)\r\nConnection: close\r\n\r\n".utf8)
-        debugLog("[LocalItmsHTTPServer] Sending IPA (\(fileData.count) bytes) to installd.")
-        guard sendAll(clientFD, header) else {
-            debugLog("[LocalItmsHTTPServer] Failed to send the IPA header.")
+        let total = fileData.count
+        var start = 0
+        var end = total - 1
+        var isPartial = false
+
+        if let rangeHeader = headers["range"]?.lowercased(), rangeHeader.hasPrefix("bytes=") {
+            let spec = rangeHeader.dropFirst("bytes=".count)
+                .split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+            if spec.count == 2 {
+                let startText = String(spec[0]).trimmingCharacters(in: .whitespaces)
+                let endText = String(spec[1]).trimmingCharacters(in: .whitespaces)
+                if startText.isEmpty {
+                    if let suffix = Int(endText) {
+                        start = max(0, total - suffix)
+                        end = total - 1
+                        isPartial = true
+                    }
+                } else if let requestedStart = Int(startText) {
+                    start = max(0, min(requestedStart, total - 1))
+                    end = endText.isEmpty ? total - 1 : max(start, min(Int(endText) ?? total - 1, total - 1))
+                    isPartial = true
+                }
+            }
+        }
+
+        let length = end - start + 1
+        var header = "HTTP/1.1 \(isPartial ? "206 Partial Content" : "200 OK")\r\nContent-Type: application/octet-stream\r\nContent-Length: \(length)\r\nAccept-Ranges: bytes\r\n"
+        if isPartial {
+            header += "Content-Range: bytes \(start)-\(end)/\(total)\r\n"
+        }
+        header += "Connection: close\r\n\r\n"
+
+        debugLog("[LocalItmsHTTPServer] \(method) IPA range \(start)-\(end)/\(total) (\(length) bytes).")
+        guard sendAll(clientFD, Data(header.utf8)) else {
+            debugLog("[LocalItmsHTTPServer] Failed to send the IPA headers.")
             return
         }
-        guard sendAll(clientFD, fileData) else {
-            debugLog("[LocalItmsHTTPServer] Failed while sending the IPA payload.")
+        guard method != "HEAD" else { return }
+
+        guard sendSlice(clientFD, data: fileData, start: start, length: length) else {
+            debugLog("[LocalItmsHTTPServer] Client closed while the IPA payload was being sent.")
             return
         }
-        downloadState.markCompleted()
+        if end == total - 1 {
+            downloadState.markCompleted()
+        }
         debugLog("[LocalItmsHTTPServer] Finished sending the IPA.")
+    }
+
+    @discardableResult
+    private func sendSlice(_ socketFD: Int32, data: Data, start: Int, length: Int) -> Bool {
+        guard length > 0 else { return true }
+        let end = start + length
+        var sent = start
+
+        let success: Bool = data.withUnsafeBytes { raw in
+            guard let baseAddress = raw.baseAddress else { return true }
+            while sent < end {
+                let written = send(socketFD, baseAddress.advanced(by: sent), end - sent, 0)
+                if written <= 0 {
+                    return false
+                }
+                sent += written
+            }
+            return true
+        }
+        return success
     }
 
     @discardableResult
