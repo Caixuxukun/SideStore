@@ -51,8 +51,14 @@ class FetchProvisioningProfilesOperation: BasePipelineOperation<InstallAppOperat
                     profiles[updatedExtensionBundleId] = overrideProfile
                 } else if let extensionProfile = ProfileManager.shared.matchingProfile(for: updatedExtensionBundleId, certificate: certificate) {
                     profiles[updatedExtensionBundleId] = extensionProfile
+                } else if self.context.useMainProfile || UserDefaults.standard.customizeAppExtensions == .useMainProfile {
+                    // Feather-style fallback: keep the extension's own Bundle ID but sign it with the
+                    // main profile, so its entitlements match the profile embedded next to it. iOS may
+                    // or may not accept this at install time. Needs proper testing on devices.
+                    self.debugLog("[FetchProvisioningProfiles] No profile for extension '\(updatedExtensionBundleId)'; reusing the main profile because 'Use Main Profile' was selected.")
+                    profiles[updatedExtensionBundleId] = overrideProfile
                 } else {
-                    throw OperationError.missingProvisioningProfile(reason: "Import a profile for extension '\(updatedExtensionBundleId)' containing the same signing certificate, or remove that extension.")
+                    throw OperationError.missingProvisioningProfile(reason: "Import a profile for extension '\(updatedExtensionBundleId)' containing the same signing certificate, choose 'Keep App Extensions (Use Main Profile)' when installing, or set 'Customize Extensions' to 'Remove All'.")
                 }
             }
             // Every retained extension has its own validated mapping, even when
