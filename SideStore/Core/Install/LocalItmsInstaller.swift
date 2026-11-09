@@ -50,11 +50,13 @@ final class LocalItmsInstaller: @unchecked Sendable {
 
         let server = LocalItmsHTTPServer(ipaURL: ipaURL)
         try server.start()
+        let host = Self.preferredHost()
+        let baseURL = "http://\(host):\(server.port)"
         server.manifestData = Self.manifestData(
             bundleIdentifier: bundleIdentifier,
             version: version,
             title: displayName,
-            ipaURL: server.ipaServerURL
+            ipaURL: URL(string: "\(baseURL)/itms.ipa")!
         )
         self.server = server
 
@@ -67,12 +69,12 @@ final class LocalItmsInstaller: @unchecked Sendable {
             Task { @MainActor in UIApplication.shared.isIdleTimerDisabled = false }
         }
 
-        let manifestURLString = Self.percentEncode(server.manifestURL.absoluteString)
+        debugLog("[LocalItmsInstaller] Serving '\(ipaURL.lastPathComponent)' on \(baseURL) for \(bundleIdentifier).")
+        let manifestURLString = Self.percentEncode("\(baseURL)/manifest.plist")
         guard let installURL = URL(string: "itms-services://?action=download-manifest&id=\(bundleIdentifier)&url=\(manifestURLString)") else {
             throw InstallError.cannotOpenInstallURL
         }
 
-        debugLog("[LocalItmsInstaller] Serving '\(ipaURL.lastPathComponent)' on 127.0.0.1:\(server.port) for \(bundleIdentifier).")
         guard await Self.open(installURL) else {
             throw InstallError.installURLRejected
         }
@@ -102,6 +104,47 @@ final class LocalItmsInstaller: @unchecked Sendable {
         ]
 
         return (try? PropertyListSerialization.data(fromPropertyList: manifest, format: .xml, options: 0)) ?? Data()
+    }
+
+    private static func preferredHost() -> String {
+        var wifiAddress: String?
+        var otherAddress: String?
+
+        var interfacePointer: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfacePointer) == 0, let firstInterface = interfacePointer else {
+            return "127.0.0.1"
+        }
+        defer { freeifaddrs(interfacePointer) }
+
+        for interface in sequence(first: firstInterface, next: { $0.pointee.ifa_next }) {
+            guard let address = interface.pointee.ifa_addr else { continue }
+            guard address.pointee.sa_family == UInt8(AF_INET) else { continue }
+
+            let flags = Int32(interface.pointee.ifa_flags)
+            guard (flags & IFF_UP) != 0, (flags & IFF_LOOPBACK) == 0 else { continue }
+
+            var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let result = getnameinfo(address,
+                                     socklen_t(address.pointee.sa_len),
+                                     &hostname,
+                                     socklen_t(hostname.count),
+                                     nil,
+                                     0,
+                                     NI_NUMERICHOST)
+            guard result == 0 else { continue }
+
+            let candidate = String(cString: hostname)
+            guard !candidate.isEmpty, !candidate.hasPrefix("169.254.") else { continue }
+
+            let name = String(cString: interface.pointee.ifa_name)
+            if name.hasPrefix("en") {
+                wifiAddress = wifiAddress ?? candidate
+            } else {
+                otherAddress = otherAddress ?? candidate
+            }
+        }
+
+        return wifiAddress ?? otherAddress ?? "127.0.0.1"
     }
 
     private static func percentEncode(_ string: String) -> String {
@@ -206,7 +249,9 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = in_port_t(0)
-        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        // Listen on every interface: installd refused to reach 127.0.0.1 on some iOS versions, so
+        // the manifest URL uses the device's own LAN address instead. Needs proper testing.
+        address.sin_addr = in_addr(s_addr: 0)
 
         let bindResult: Int32 = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
