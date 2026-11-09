@@ -108,6 +108,7 @@ final class LocalItmsInstaller: @unchecked Sendable {
         guard await Self.presentInstallPage(pageURL) else {
             throw InstallError.installURLRejected
         }
+        debugLog("[LocalItmsInstaller] Install page presented; waiting for installd to request the IPA.")
 
         try await server.waitForDownload(timeout: 600)
         debugLog("[LocalItmsInstaller] installd downloaded the IPA; waiting for the install to settle.")
@@ -168,6 +169,7 @@ final class LocalItmsInstaller: @unchecked Sendable {
         }
 
         let safari = SFSafariViewController(url: url)
+        debugLog("[LocalItmsInstaller] Presenting install page from \(type(of: top)).")
         top.present(safari, animated: true)
         return true
     }
@@ -477,6 +479,8 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
             path = String(path[..<queryIndex])
         }
 
+        debugLog("[LocalItmsHTTPServer] Request: \(requestLine)")
+
         switch path {
         case "/install.html":
             _ = sendAll(clientFD, response(status: "200 OK", contentType: "text/html; charset=utf-8", body: installPageHTML))
@@ -503,9 +507,17 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
         }
 
         let header = Data("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: \(fileData.count)\r\nConnection: close\r\n\r\n".utf8)
-        guard sendAll(clientFD, header) else { return }
-        guard sendAll(clientFD, fileData) else { return }
+        debugLog("[LocalItmsHTTPServer] Sending IPA (\(fileData.count) bytes) to installd.")
+        guard sendAll(clientFD, header) else {
+            debugLog("[LocalItmsHTTPServer] Failed to send the IPA header.")
+            return
+        }
+        guard sendAll(clientFD, fileData) else {
+            debugLog("[LocalItmsHTTPServer] Failed while sending the IPA payload.")
+            return
+        }
         downloadState.markCompleted()
+        debugLog("[LocalItmsHTTPServer] Finished sending the IPA.")
     }
 
     @discardableResult
