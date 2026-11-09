@@ -56,7 +56,9 @@ struct CertificatesView: View {
                 CertificatesListView(
                     viewModel: viewModel,
                     onRowTap:     { pushDetailView(for: $0) },
-                    onRevoke:     { presentRevokeAlert(for: $0) },
+                    onRevoke: { cert in
+                        DispatchQueue.main.async { presentRevokeAlert(for: cert) }
+                    },
                     onExportP12:  { cert in
                         certificateToExport = cert
                         exportPasswordInput = ""
@@ -72,7 +74,13 @@ struct CertificatesView: View {
                     onAddKeyText: { cert in
                         keyTextImportItem = KeyTextImportItem(id: cert.serialNumber, cert: cert)
                     },
-                    onDelete: { certificateToDelete = $0; showDeleteConfirmation = true }
+                    onDelete: { cert in
+                        // Present the confirmation outside the swipe action's collection view update.
+                        DispatchQueue.main.async {
+                            certificateToDelete = cert
+                            showDeleteConfirmation = true
+                        }
+                    }
                 )
             }
             .refreshable {

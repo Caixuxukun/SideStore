@@ -51,14 +51,17 @@ struct CertificatesListView: View {
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             if viewModel.remoteSerials.contains(cert.serialNumber) {
                                 SwiftUI.Button(role: .destructive) {
-                                    onRevoke(cert)
+                                    // Defer the state change until SwiftUI finishes the swipe action's
+                                    // own collection view update, otherwise it throws an invalid-update
+                                    // assertion and the app aborts.
+                                    DispatchQueue.main.async { onRevoke(cert) }
                                 } label: {
                                     Label("Revoke", systemImage: "xmark.circle")
                                 }
                             }
                             if viewModel.isCertificateLocallyCached(cert) {
                                 SwiftUI.Button(role: .destructive) {
-                                    onDelete(cert)
+                                    DispatchQueue.main.async { onDelete(cert) }
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
@@ -67,14 +70,14 @@ struct CertificatesListView: View {
                         .swipeActions(edge: .leading, allowsFullSwipe: true) {
                             if cert.serialNumber == viewModel.activeSerialNumber {
                                 SwiftUI.Button {
-                                    viewModel.deactivateActiveCertificate()
+                                    DispatchQueue.main.async { viewModel.deactivateActiveCertificate() }
                                 } label: {
                                     Label("Deactivate", systemImage: "xmark.seal")
                                 }
                                 .tint(.gray)
                             } else {
                                 SwiftUI.Button {
-                                    viewModel.makeCertificateActive(cert)
+                                    DispatchQueue.main.async { viewModel.makeCertificateActive(cert) }
                                 } label: {
                                     Label("Activate", systemImage: "checkmark.seal")
                                 }

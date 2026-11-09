@@ -148,8 +148,14 @@ class CertificatesViewModel: ObservableObject {
         CertificateManager.shared.deleteCertificate(serialNumber: serialNumber)
     }
     
-    func loadCertificates(presentingViewController: UIViewController?, isPullToRefresh: Bool = false, completion: (() -> Void)? = nil) {
-        if !isPullToRefresh { self.isLoading = true }
+    /// SwiftUI lists crash when a ForEach ID is duplicated (UICollectionView invalid update),
+    /// so never publish the same serial twice.
+    private static func uniqueCertificates(_ certificates: [ALTX509Certificate]) -> [ALTX509Certificate] {
+        var seen = Set<String>()
+        return certificates.filter { seen.insert($0.serialNumber).inserted }
+    }
+
+    func loadCertificates(presentingViewController: UIViewController?, isPullToRefresh: Bool = false, completion: (() -> Void)? = nil) {        if !isPullToRefresh { self.isLoading = true }
         self.hasFetchedRemote = false
         self.errorMessage = nil
         self.fetchActiveSerialNumber()
@@ -161,7 +167,7 @@ class CertificatesViewModel: ObservableObject {
         if let active = activeCert, !mergedLocal.contains(where: { $0.serialNumber == active.serialNumber }) {
             mergedLocal.append(active)
         }
-        self.certificates = mergedLocal
+        self.certificates = Self.uniqueCertificates(mergedLocal)
         
         Task { @MainActor in
             defer { self.isLoading = false; completion?() }
@@ -193,7 +199,7 @@ class CertificatesViewModel: ObservableObject {
                    !localCerts.contains(where: { $0.serialNumber == active.serialNumber }) {
                     merged.append(active)
                 }
-                self.certificates  = merged
+                self.certificates  = Self.uniqueCertificates(merged)
                 self.remoteSerials = matchedRemoteSerials
                 self.hasFetchedRemote = true
             } catch {
