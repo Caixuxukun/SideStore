@@ -32,7 +32,11 @@ final class RemoveBackupDataOperation: BasePipelineOperation<InstallAppOperation
             self.backupDirectoryURL(for: installedApp)
         }
         guard let backupDirectoryURL else {
-            throw OperationError.missingAppGroup(name: installedApp.bundleIdentifier)
+            // Third-party profiles do not grant SideStore its App Group, so there is no shared
+            // backup to remove. Skipping must not block deleting the app.
+            debugLog("[RemoveBackupDataOperation] No App Group backup directory for '\(installedApp.bundleIdentifier)'; nothing to remove.")
+            self.setProgress(100)
+            return true
         }
         
         guard FileManager.default.fileExists(atPath: backupDirectoryURL.path) else {

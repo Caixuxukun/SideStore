@@ -186,10 +186,17 @@ final class InstallAppOperation: BasePipelineOperation<InstallAppOperationContex
         }
         
         // Phase 2: App installation
-        if UserDefaults.standard.preferResignedIPA {
-            try await installIPA(bundleID)
+        if UserDefaults.standard.installMethod == .localItms && !isSelfReinstall {
+            try await installViaLocalItms(resignedAppBundle: resignedAppBundle, storeBuildVersion: storeBuildVersion)
         } else {
-            try await installAppBundle(bundleID, appName: resignedAppBundle.fileURL.lastPathComponent)
+            if UserDefaults.standard.installMethod == .localItms && isSelfReinstall {
+                self.debugLog("[InstallAppOperation] Reinstalling SideStore itself; falling back to the device API.")
+            }
+            if UserDefaults.standard.preferResignedIPA {
+                try await installIPA(bundleID)
+            } else {
+                try await installAppBundle(bundleID, appName: resignedAppBundle.fileURL.lastPathComponent)
+            }
         }
         
         self.setProgress(90)
@@ -203,6 +210,30 @@ final class InstallAppOperation: BasePipelineOperation<InstallAppOperationContex
         
         self.setProgress(100)
         return installedApp
+    }
+
+    private func installViaLocalItms(resignedAppBundle: ALTApplication, storeBuildVersion: String?) async throws {
+        #if os(tvOS)
+        throw OperationError.invalidParameters("Local itms-services install is not supported on tvOS.")
+        #else
+        guard let ipaURL = self.context.ipaURL else {
+            throw OperationError.invalidParameters("Local itms-services install needs the resigned IPA, but CreateIpaOperation produced none.")
+        }
+
+        let infoPlist = resignedAppBundle.infoPlist
+        let version = (infoPlist["CFBundleShortVersionString"] as? String) ?? storeBuildVersion ?? "1.0"
+        let title = (infoPlist["CFBundleDisplayName"] as? String)
+            ?? (infoPlist["CFBundleName"] as? String)
+            ?? resignedAppBundle.fileURL.deletingPathExtension().lastPathComponent
+
+        self.debugLog("[InstallAppOperation] Installing \(resignedAppBundle.bundleIdentifier) \(version) via local itms-services.")
+        try await LocalItmsInstaller.shared.install(
+            ipaURL: ipaURL,
+            bundleIdentifier: resignedAppBundle.bundleIdentifier,
+            version: version,
+            displayName: title
+        )
+        #endif
     }
     
     private static func isDifferentSideStoreContainer(_ installedApp: InstalledApp, _ resignedAppBundle: ALTApplication) -> Bool {
@@ -247,7 +278,11 @@ final class InstallAppOperation: BasePipelineOperation<InstallAppOperationContex
             installedApp.customBundleIdentifier = context.customBundleIdentifier
             installedApp.useMainProfile = context.useMainProfile
             installedApp.appBundleFingerprint = appBundleFingerprint
-            if let authTeam = authTeam {
+            if self.context.overrideProvisioningProfile != nil {
+                // Apps signed with an imported third-party profile are not part of the signed-in
+                // Apple ID team, so they must not consume free-account active slots.
+                installedApp.team = nil
+            } else if let authTeam = authTeam {
                 let teamPredicate = NSPredicate(format: "%K == %@", #keyPath(Team.identifier), authTeam.identifier)
                 if let team = Team.first(satisfying: teamPredicate, in: backgroundContext) {
                     installedApp.team = team

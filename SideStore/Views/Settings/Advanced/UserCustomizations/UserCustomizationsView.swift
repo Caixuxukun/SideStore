@@ -34,6 +34,7 @@ struct UserCustomizationsView: View {
     @State private var isAutoLaunchAppAfterInstallEnabled: Bool = UserDefaults.standard.isAutoLaunchAppAfterInstallEnabled
     @State private var autoFixAppGroupIDs: Bool = UserDefaults.standard.autoFixAppGroupIDs
     @State private var preferResignedIPA: Bool = UserDefaults.standard.preferResignedIPA
+    @State private var installMethod: InstallMethod = UserDefaults.standard.installMethod
     @State private var pendingPreferIPAOngoing: Bool = false
     @State private var showPreferIPAToggleAlert: Bool = false
     @State private var isExportResignedAppEnabled: Bool = UserDefaults.standard.isExportResignedAppEnabled
@@ -963,6 +964,37 @@ struct UserCustomizationsView: View {
                         UserDefaults.standard.isExportResignedAppEnabled = newValue
                     }
                 ))
+                
+                divider
+                
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Install Method")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundColor(.white)
+                        Text(installMethod.detail)
+                            .font(.footnote)
+                            .foregroundColor(.white.opacity(0.6))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { installMethod },
+                        set: { newValue in
+                            installMethod = newValue
+                            UserDefaults.standard.installMethod = newValue
+                        }
+                    )) {
+                        ForEach(InstallMethod.allCases) { method in
+                            Text(method.displayName).tag(method)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .tint(Color.white.opacity(0.7))
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .frame(minHeight: 50)
                 
                 divider
                 

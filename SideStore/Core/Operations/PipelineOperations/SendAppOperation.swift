@@ -31,6 +31,12 @@ final class SendAppOperation: BasePipelineOperation<InstallAppOperationContext, 
         let appURL = resignedAppBundle.fileURL
         verboseLog("[SendAppOperation] AFC App Bundle `fileURL`: \(appURL.absoluteString)")
 
+        if UserDefaults.standard.installMethod == .localItms {
+            debugLog("[SendAppOperation] Local itms-services install selected; the IPA is served from SideStore instead of AFC.")
+            self.setProgress(100)
+            return resignedAppBundle
+        }
+
         do {
             await CellularRefreshManager.shared.turnOffDataIfNeeded()
             
