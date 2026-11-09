@@ -306,6 +306,7 @@ class InstallAppOperationContext: PipelineOperationContext
     }()
 
     var ipaURL: URL?
+    var skipAppDataBackup: Bool = false
     var resignedAppBundle: ALTApplication?
     var installedApp: InstalledApp?
     var appBundleFingerprint: String?

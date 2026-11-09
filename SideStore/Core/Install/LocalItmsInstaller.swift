@@ -52,26 +52,9 @@ final class LocalItmsInstaller: @unchecked Sendable {
         let server = LocalItmsHTTPServer(ipaURL: ipaURL)
         try server.start()
 
-        // Installd may be unable to reach a VPN/utun address, and loopback is blocked on some iOS
-        // versions. Probe every candidate from inside the app first and advertise the one that works.
-        let candidates = Self.candidateHosts()
-        var host = candidates.first ?? "127.0.0.1"
-        for candidate in candidates {
-            if await Self.probe(host: candidate, port: server.port) {
-                host = candidate
-                break
-            }
-            debugLog("[LocalItmsInstaller] Probe failed for \(candidate); trying next candidate.")
-        }
+        let host = Self.candidateHosts().first ?? "127.0.0.1"
         let baseURL = "http://\(host):\(server.port)"
         let payloadURL = "\(baseURL)/itms.ipa"
-        debugLog("[LocalItmsInstaller] Using \(baseURL) for the local install (candidates: \(candidates)).")
-        server.manifestData = Self.manifestData(
-            bundleIdentifier: bundleIdentifier,
-            version: version,
-            title: displayName,
-            ipaURL: URL(string: payloadURL)!
-        )
         self.server = server
 
         let startedKeepAlive = !UserDefaults.standard.isBackgroundServiceEnabled && BackgroundAudioService.shared.start()
@@ -104,14 +87,11 @@ final class LocalItmsInstaller: @unchecked Sendable {
         guard let pageURL = URL(string: "\(baseURL)/install.html") else {
             throw InstallError.cannotOpenInstallURL
         }
-        debugLog("[LocalItmsInstaller] Opening install page \(pageURL) with manifest \(manifestURL).")
         guard await Self.presentInstallPage(pageURL) else {
             throw InstallError.installURLRejected
         }
-        debugLog("[LocalItmsInstaller] Install page presented; waiting for installd to request the IPA.")
 
         try await server.waitForDownload(timeout: 600)
-        debugLog("[LocalItmsInstaller] installd downloaded the IPA; waiting for the install to settle.")
         // installd still has to verify and move the app into place after the download finishes.
         try await Task.sleep(nanoseconds: 5_000_000_000)
     }
@@ -169,36 +149,13 @@ final class LocalItmsInstaller: @unchecked Sendable {
         }
 
         let safari = SFSafariViewController(url: url)
-        debugLog("[LocalItmsInstaller] Presenting install page from \(type(of: top)).")
         top.present(safari, animated: true)
         return true
-    }
-
-    private static func manifestData(bundleIdentifier: String, version: String, title: String, ipaURL: URL) -> Data {
-        let manifest: [String: Any] = [
-            "items": [[
-                "assets": [
-                    [
-                        "kind": "software-package",
-                        "url": ipaURL.absoluteString
-                    ]
-                ],
-                "metadata": [
-                    "bundle-identifier": bundleIdentifier,
-                    "bundle-version": version,
-                    "kind": "software",
-                    "title": title
-                ]
-            ]]
-        ]
-
-        return (try? PropertyListSerialization.data(fromPropertyList: manifest, format: .xml, options: 0)) ?? Data()
     }
 
     private static func candidateHosts() -> [String] {
         var wifiAddress: String?
         var cellularAddress: String?
-        var discovered: [String] = []
 
         var interfacePointer: UnsafeMutablePointer<ifaddrs>?
         if getifaddrs(&interfacePointer) == 0, let firstInterface = interfacePointer {
@@ -225,7 +182,6 @@ final class LocalItmsInstaller: @unchecked Sendable {
                 guard !candidate.isEmpty, !candidate.hasPrefix("169.254.") else { continue }
 
                 let name = String(cString: interface.pointee.ifa_name)
-                discovered.append("\(name)=\(candidate)")
 
                 // Feather only advertises en0/pdp_ip0: VPN/utun addresses are not reachable by installd.
                 if name == "en0" {
@@ -236,28 +192,11 @@ final class LocalItmsInstaller: @unchecked Sendable {
             }
         }
 
-        debugLog("[LocalItmsInstaller] Interface candidates: \(discovered)")
-
         var hosts: [String] = []
         for host in [wifiAddress, cellularAddress, "127.0.0.1"].compactMap({ $0 }) where !hosts.contains(host) {
             hosts.append(host)
         }
         return hosts
-    }
-
-    private static func probe(host: String, port: UInt16) async -> Bool {
-        guard let url = URL(string: "http://\(host):\(port)/manifest.plist") else {
-            return false
-        }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 2
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
-        } catch {
-            return false
-        }
     }
 
     private static func percentEncode(_ string: String) -> String {
@@ -331,19 +270,10 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
     private var listeningSocket: Int32 = -1
     private var acceptThread: Thread?
     private(set) var port: UInt16 = 0
-    var manifestData = Data()
     var installPageHTML = Data()
 
     init(ipaURL: URL) {
         self.ipaURL = ipaURL
-    }
-
-    var manifestURL: URL {
-        URL(string: "http://127.0.0.1:\(port)/manifest.plist")!
-    }
-
-    var ipaServerURL: URL {
-        URL(string: "http://127.0.0.1:\(port)/itms.ipa")!
     }
 
     deinit {
@@ -499,13 +429,9 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
             }
         }
 
-        debugLog("[LocalItmsHTTPServer] Request: \(requestLine)")
-
         switch path {
         case "/install.html":
             sendResponse(clientFD, method: method, status: "200 OK", contentType: "text/html; charset=utf-8", body: installPageHTML)
-        case "/manifest.plist":
-            sendResponse(clientFD, method: method, status: "200 OK", contentType: "application/xml", body: manifestData)
         case "/itms.ipa":
             sendIPA(clientFD, method: method, headers: requestHeaders)
         default:
@@ -560,21 +486,13 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
         }
         header += "Connection: close\r\n\r\n"
 
-        debugLog("[LocalItmsHTTPServer] \(method) IPA range \(start)-\(end)/\(total) (\(length) bytes).")
-        guard sendAll(clientFD, Data(header.utf8)) else {
-            debugLog("[LocalItmsHTTPServer] Failed to send the IPA headers.")
-            return
-        }
+        guard sendAll(clientFD, Data(header.utf8)) else { return }
         guard method != "HEAD" else { return }
 
-        guard sendSlice(clientFD, data: fileData, start: start, length: length) else {
-            debugLog("[LocalItmsHTTPServer] Client closed while the IPA payload was being sent.")
-            return
-        }
+        guard sendSlice(clientFD, data: fileData, start: start, length: length) else { return }
         if end == total - 1 {
             downloadState.markCompleted()
         }
-        debugLog("[LocalItmsHTTPServer] Finished sending the IPA.")
     }
 
     @discardableResult

@@ -31,6 +31,13 @@ final class StageBackupAppOperation: BasePipelineOperation<InstallAppOperationCo
             debugLog("[StageBackupAppOperation] Error: target app is nil")
             throw OperationError.invalidParameters("StageBackupAppOperation: target app is nil")
         }
+
+        // Third-party profiles do not grant SideStore's App Group, so the backup helper has nowhere
+        // shared to write the app data. Continue without a backup instead of failing deactivation.
+        if FileManager.default.appBackupsDirectory == nil {
+            debugLog("[StageBackupAppOperation] No App Group available; app data backup will be skipped for '\(targetApp.name)'.")
+            context.skipAppDataBackup = true
+        }
         
         debugLog("[StageBackupAppOperation] Preparing backup app stage for '\(targetApp.name)' (\(targetApp.bundleIdentifier)), target bundleID: '\(context.targetBundleIdentifier)'")
         
