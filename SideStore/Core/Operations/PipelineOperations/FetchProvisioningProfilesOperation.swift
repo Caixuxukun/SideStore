@@ -65,8 +65,19 @@ class FetchProvisioningProfilesOperation: BasePipelineOperation<InstallAppOperat
             // the user requested sharing the main profile.
             self.context.useMainProfile = false
             self.context.appexBundleIds = nil
-            let deviceID = profiles.values.contains(where: { !$0.deviceIDs.isEmpty })
-                ? try await safeFetchUDID() : nil
+            let needsDeviceID = profiles.values.contains(where: { !$0.deviceIDs.isEmpty })
+            let deviceID: String?
+            if needsDeviceID {
+                // Prefer the cached UDID so local itms-services installs work without a pairing
+                // connection; fall back to a live fetch when nothing is cached.
+                if let cachedUDID = try? await fetchUDID(forceLive: false) {
+                    deviceID = cachedUDID
+                } else {
+                    deviceID = try await safeFetchUDID()
+                }
+            } else {
+                deviceID = nil
+            }
             for profile in profiles.values {
                 try SigningProfileRules.validateDevice(profileData: profile.data, deviceID: deviceID)
             }

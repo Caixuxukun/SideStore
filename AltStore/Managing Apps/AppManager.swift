@@ -91,6 +91,13 @@ final class AppManager: ObservableObject, @unchecked Sendable
                         continue
                     }
 
+                    // Apps signed with an imported profile are not part of the free team, even if a
+                    // previous build associated one. Clear it so they stop consuming active slots.
+                    if app.team != nil, ProfileManager.shared.getAssignedProfile(for: app.bundleIdentifier) != nil {
+                        debugLog("[AppManager] Clearing free team for third-party app '\(app.bundleIdentifier)'.")
+                        app.team = nil
+                    }
+
                     guard app.isActive, !self.isActivelyManagingApp(withBundleID: app.bundleIdentifier) else { continue }
 
                     let isDeclared = UTType(app.installedAppUTI)?.isDeclared ?? false

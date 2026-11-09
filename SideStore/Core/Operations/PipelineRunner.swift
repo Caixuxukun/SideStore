@@ -144,15 +144,21 @@ final class PipelineRunner: Sendable
         }
         
         /* Minimuxer Readiness Check */
-        do {
-            try await ensureMinimuxerReady()
-        } catch let opError as OperationError {
-            group.error = opError
-            for operation in operations {
-                let elapsed = CFAbsoluteTimeGetCurrent() - group.operationStartTime
-                operation.logSummary(status: "FAILED", elapsed: elapsed, error: opError)
+        if UserDefaults.standard.installMethod == .localItms {
+            // The local itms-services path serves the IPA itself and never talks to the device API,
+            // so it must not fail just because the VPN/pairing connection is unavailable.
+            debugLog("[PipelineRunner] Skipping minimuxer readiness check: local itms-services install selected.")
+        } else {
+            do {
+                try await ensureMinimuxerReady()
+            } catch let opError as OperationError {
+                group.error = opError
+                for operation in operations {
+                    let elapsed = CFAbsoluteTimeGetCurrent() - group.operationStartTime
+                    operation.logSummary(status: "FAILED", elapsed: elapsed, error: opError)
+                }
+                throw opError
             }
-            throw opError
         }
         
         group.progress.totalUnitCount = Int64(operations.count * 100)

@@ -9,8 +9,8 @@
 //
 
 import Foundation
-import Network
 import UIKit
+import Darwin
 
 final class LocalItmsInstaller: @unchecked Sendable {
     static let shared = LocalItmsInstaller()
@@ -139,6 +139,7 @@ final class LocalItmsInstaller: @unchecked Sendable {
 }
 
 /// Minimal HTTP/1.1 server that serves the itms manifest and the resigned IPA on 127.0.0.1.
+/// Uses plain BSD sockets because NWListener refused to bind a loopback endpoint on device.
 final class LocalItmsHTTPServer: @unchecked Sendable {
     enum ServerError: LocalizedError {
         case listenerFailed(String)
@@ -169,9 +170,10 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
     }
 
     private let ipaURL: URL
-    private let queue = DispatchQueue(label: "io.sidestore.LocalItmsHTTPServer", qos: .userInitiated)
     private let downloadState = DownloadState()
-    private var listener: NWListener?
+    private let connectionQueue = DispatchQueue(label: "io.sidestore.LocalItmsHTTPServer.connections", qos: .userInitiated, attributes: .concurrent)
+    private var listeningSocket: Int32 = -1
+    private var acceptThread: Thread?
     private(set) var port: UInt16 = 0
     var manifestData = Data()
 
@@ -187,38 +189,72 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
         URL(string: "http://127.0.0.1:\(port)/itms.ipa")!
     }
 
+    deinit {
+        stop()
+    }
+
     func start() throws {
-        let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: .init("127.0.0.1"), port: .any)
-
-        let listener: NWListener
-        do {
-            listener = try NWListener(using: parameters)
-        } catch {
-            throw ServerError.listenerFailed(error.localizedDescription)
+        let socketFD = socket(AF_INET, SOCK_STREAM, 0)
+        guard socketFD >= 0 else {
+            throw ServerError.listenerFailed("socket() failed with errno \(errno)")
         }
 
-        listener.newConnectionHandler = { [weak self] connection in
-            self?.handle(connection)
-        }
-        listener.start(queue: queue)
-        self.listener = listener
+        var reuse: Int32 = 1
+        _ = setsockopt(socketFD, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
 
-        let deadline = Date().addingTimeInterval(5)
-        while listener.port == nil && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(0)
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+        let bindResult: Int32 = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(socketFD, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
         }
-        guard let boundPort = listener.port?.rawValue, boundPort != 0 else {
-            listener.cancel()
-            self.listener = nil
-            throw ServerError.listenerFailed("The local installer could not bind a loopback port.")
+        guard bindResult == 0 else {
+            let code = errno
+            close(socketFD)
+            throw ServerError.listenerFailed("bind() failed with errno \(code)")
         }
-        port = boundPort
+
+        guard listen(socketFD, 8) == 0 else {
+            let code = errno
+            close(socketFD)
+            throw ServerError.listenerFailed("listen() failed with errno \(code)")
+        }
+
+        var boundAddress = sockaddr_in()
+        var boundLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &boundAddress) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(socketFD, $0, &boundLength)
+            }
+        }
+
+        port = UInt16(bigEndian: boundAddress.sin_port)
+        guard port != 0 else {
+            close(socketFD)
+            throw ServerError.listenerFailed("The local installer did not bind a loopback port.")
+        }
+        listeningSocket = socketFD
+
+        let thread = Thread { [weak self] in
+            self?.acceptConnections(on: socketFD)
+        }
+        thread.name = "io.sidestore.LocalItmsHTTPServer.accept"
+        acceptThread = thread
+        thread.start()
     }
 
     func stop() {
-        listener?.cancel()
-        listener = nil
+        let socketFD = listeningSocket
+        listeningSocket = -1
+        if socketFD >= 0 {
+            close(socketFD)
+        }
+        acceptThread = nil
     }
 
     func waitForDownload(timeout: TimeInterval) async throws {
@@ -232,42 +268,52 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
         throw LocalItmsInstaller.InstallError.downloadTimedOut
     }
 
-    private func handle(_ connection: NWConnection) {
-        connection.start(queue: queue)
-        receive(connection, accumulated: Data())
-    }
-
-    private func receive(_ connection: NWConnection, accumulated: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
-            guard let self else {
-                connection.cancel()
-                return
+    private func acceptConnections(on socketFD: Int32) {
+        while listeningSocket == socketFD {
+            var clientAddress = sockaddr_in()
+            var clientLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let clientFD = withUnsafeMutablePointer(to: &clientAddress) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    accept(socketFD, $0, &clientLength)
+                }
             }
 
-            var buffer = accumulated
-            if let data { buffer.append(data) }
-
-            if let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8)) {
-                let header = String(decoding: buffer[..<headerEnd.lowerBound], as: UTF8.self)
-                self.respond(to: connection, requestHeader: header)
-                return
+            guard clientFD >= 0 else {
+                if errno == EINTR { continue }
+                break
             }
 
-            if isComplete || error != nil {
-                connection.cancel()
-                return
+            connectionQueue.async { [weak self] in
+                self?.handleConnection(clientFD)
             }
-            self.receive(connection, accumulated: buffer)
         }
     }
 
-    private func respond(to connection: NWConnection, requestHeader: String) {
-        let requestLine = requestHeader.components(separatedBy: "\r\n").first ?? ""
+    private func handleConnection(_ clientFD: Int32) {
+        defer { close(clientFD) }
+
+        var timeout = timeval(tv_sec: 20, tv_usec: 0)
+        _ = setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        _ = setsockopt(clientFD, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        var requestData = Data()
+        var buffer = [UInt8](repeating: 0, count: 8192)
+        let headerTerminator = Data("\r\n\r\n".utf8)
+
+        while requestData.range(of: headerTerminator) == nil {
+            let received = buffer.withUnsafeMutableBytes { raw -> Int in
+                recv(clientFD, raw.baseAddress, raw.count, 0)
+            }
+            guard received > 0 else { return }
+            requestData.append(contentsOf: buffer[0..<received])
+            if requestData.count > 64 * 1024 { return }
+        }
+
+        guard let headerEnd = requestData.range(of: headerTerminator) else { return }
+        let header = String(decoding: requestData[..<headerEnd.lowerBound], as: UTF8.self)
+        let requestLine = header.components(separatedBy: "\r\n").first ?? ""
         let parts = requestLine.split(separator: " ")
-        guard parts.count >= 2 else {
-            connection.cancel()
-            return
-        }
+        guard parts.count >= 2 else { return }
 
         var path = String(parts[1])
         if let queryIndex = path.firstIndex(of: "?") {
@@ -276,66 +322,51 @@ final class LocalItmsHTTPServer: @unchecked Sendable {
 
         switch path {
         case "/manifest.plist":
-            send(connection, status: "200 OK", contentType: "application/xml", body: manifestData)
+            _ = sendAll(clientFD, response(status: "200 OK", contentType: "application/xml", body: manifestData))
         case "/itms.ipa":
-            sendFile(connection)
+            sendIPA(clientFD)
         default:
-            send(connection, status: "404 Not Found", contentType: "text/plain", body: Data("Not Found".utf8))
+            _ = sendAll(clientFD, response(status: "404 Not Found", contentType: "text/plain", body: Data("Not Found".utf8)))
         }
     }
 
-    private func send(_ connection: NWConnection, status: String, contentType: String, body: Data) {
-        var response = Data()
-        response.append(Data("HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8))
-        response.append(body)
-        connection.send(content: response, completion: .contentProcessed { _ in
-            connection.cancel()
-        })
+    private func response(status: String, contentType: String, body: Data) -> Data {
+        var responseData = Data()
+        responseData.append(Data("HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8))
+        responseData.append(body)
+        return responseData
     }
 
-    private func sendFile(_ connection: NWConnection) {
-        guard let fileHandle = try? FileHandle(forReadingFrom: ipaURL) else {
-            send(connection, status: "404 Not Found", contentType: "text/plain", body: Data("Missing IPA".utf8))
+    private func sendIPA(_ clientFD: Int32) {
+        guard let fileData = try? Data(contentsOf: ipaURL, options: .mappedIfSafe) else {
+            _ = sendAll(clientFD, response(status: "404 Not Found", contentType: "text/plain", body: Data("Missing IPA".utf8)))
             return
         }
 
-        let fileSize = (try? FileManager.default.attributesOfItem(atPath: ipaURL.path))?[.size] as? NSNumber
-        let header = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: \(fileSize?.int64Value ?? 0)\r\nConnection: close\r\n\r\n"
-        connection.send(content: Data(header.utf8), completion: .contentProcessed { [weak self] error in
-            guard let self, error == nil else {
-                try? fileHandle.close()
-                connection.cancel()
-                return
+        let header = Data("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: \(fileData.count)\r\nConnection: close\r\n\r\n".utf8)
+        guard sendAll(clientFD, header) else { return }
+        guard sendAll(clientFD, fileData) else { return }
+        downloadState.markCompleted()
+    }
+
+    @discardableResult
+    private func sendAll(_ socketFD: Int32, _ data: Data) -> Bool {
+        guard !data.isEmpty else { return true }
+        var sent = 0
+        let total = data.count
+
+        let success: Bool = data.withUnsafeBytes { raw in
+            guard let baseAddress = raw.baseAddress else { return true }
+            while sent < total {
+                let written = send(socketFD, baseAddress.advanced(by: sent), total - sent, 0)
+                if written <= 0 {
+                    return false
+                }
+                sent += written
             }
-            self.stream(connection, fileHandle: fileHandle)
-        })
-    }
-
-    private func stream(_ connection: NWConnection, fileHandle: FileHandle) {
-        let chunk: Data
-        do {
-            chunk = try fileHandle.read(upToCount: 512 * 1024) ?? Data()
-        } catch {
-            try? fileHandle.close()
-            connection.cancel()
-            return
+            return true
         }
-
-        if chunk.isEmpty {
-            try? fileHandle.close()
-            downloadState.markCompleted()
-            connection.cancel()
-            return
-        }
-
-        connection.send(content: chunk, completion: .contentProcessed { [weak self] error in
-            guard let self, error == nil else {
-                try? fileHandle.close()
-                connection.cancel()
-                return
-            }
-            self.stream(connection, fileHandle: fileHandle)
-        })
+        return success
     }
 }
 

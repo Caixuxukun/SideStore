@@ -246,8 +246,10 @@ public class InstalledApp: BaseEntity, InstalledAppProtocol
     
     public var requiredActiveSlots: Int {
         // Only free Apple ID apps count against the active-app limit. Apps signed with an imported
-        // third-party certificate are not tied to a free team, so they must not consume a slot.
+        // third-party certificate (no free team, or an assigned imported profile) are not tied to
+        // the free account, so they must not consume a slot.
         guard (self.team?.type ?? .unknown) == .free else { return 0 }
+        guard ProfileManager.shared.getAssignedProfile(for: self.bundleIdentifier) == nil else { return 0 }
         let requiredActiveSlots = UserDefaults.standard.activeAppLimitIncludesExtensions ? self.appIDCount : 1
         return requiredActiveSlots
     }
