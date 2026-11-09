@@ -150,18 +150,26 @@ final class LocalItmsInstaller: @unchecked Sendable {
 
     @MainActor
     private static func presentInstallPage(_ url: URL) async -> Bool {
-        if let root = UIApplication.shared.connectedScenes
+        guard let root = UIApplication.shared.connectedScenes
             .compactMap({ ($0 as? UIWindowScene)?.keyWindow })
-            .first?.rootViewController {
-            var top = root
-            while let presented = top.presentedViewController {
-                top = presented
-            }
-            let safari = SFSafariViewController(url: url)
-            top.present(safari, animated: true)
-            return true
+            .first?.rootViewController else {
+            return await Self.open(url)
         }
-        return await Self.open(url)
+
+        var top = root
+        while let presented = top.presentedViewController {
+            top = presented
+        }
+
+        // Presenting on an alert (or a controller that is already presenting) throws an ObjC
+        // exception, so fall back to Safari when another presentation is in flight.
+        guard !(top is UIAlertController), top.presentedViewController == nil else {
+            return await Self.open(url)
+        }
+
+        let safari = SFSafariViewController(url: url)
+        top.present(safari, animated: true)
+        return true
     }
 
     private static func manifestData(bundleIdentifier: String, version: String, title: String, ipaURL: URL) -> Data {
